@@ -1,0 +1,10 @@
+name = "f1-hub"
+compatibility_date = "2026-02-02"
+pages_build_output_dir = "web"
+
+# ---- Variables opcionales ----
+# Si en el futuro sumás una cuenta "supporter" de OpenF1 (para datos en vivo
+# reales durante la sesión), agregá el secret OPENF1_TOKEN desde el dashboard
+# de Cloudflare Pages (Settings > Environment variables > Encrypt) o con:
+#   npx wrangler pages secret put OPENF1_TOKEN
+# La función functions/api/live.js lo detecta automáticamente si existe.

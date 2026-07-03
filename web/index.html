@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<title>F1 Hub · Calendario, En Vivo, Posiciones e Historia</title>
+<meta name="description" content="Calendario de F1, próxima carrera, en vivo, posiciones de pilotos y constructores, historia por año y por Gran Premio, y noticias. Sin publicidad, sin registro.">
+<meta name="keywords" content="F1, Formula 1, calendario F1, posiciones F1, historia F1, en vivo F1, noticias F1">
+<link rel="canonical" href="https://f1hub.pages.dev/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="F1 Hub · En Vivo">
+<meta property="og:description" content="Calendario, en vivo, posiciones y GPs históricos de Fórmula 1. Gratis, sin registro, sin publicidad.">
+<meta property="og:url" content="https://f1hub.pages.dev/">
+<meta property="og:image" content="https://f1hub.pages.dev/icon-512.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="F1 Hub · En Vivo">
+<meta name="twitter:description" content="Calendario, en vivo, posiciones y GPs históricos de Fórmula 1.">
+<meta name="twitter:image" content="https://f1hub.pages.dev/icon-512.png">
+
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data: https:; frame-ancestors 'none';">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+<meta name="robots" content="index, follow">
+
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="lights-out" aria-hidden="true">
+  <div class="lights-rig">
+    <span class="bulb"></span><span class="bulb"></span><span class="bulb"></span><span class="bulb"></span><span class="bulb"></span>
+  </div>
+</div>
+
+<div class="grain"></div>
+
+<div id="app">
+
+  <header id="app-header">
+    <div class="brand">
+      <span class="brand-mark">F1</span>
+      <div class="brand-text">
+        <span class="brand-title">HUB</span>
+        <span class="brand-sub" id="season-label">Temporada —</span>
+      </div>
+    </div>
+    <div id="header-status" class="header-status" aria-live="polite"></div>
+  </header>
+
+  <nav id="tabs" role="tablist" aria-label="Secciones">
+    <button class="tab active" data-tab="calendario" role="tab" aria-selected="true">Calendario</button>
+    <button class="tab" data-tab="vivo" role="tab" aria-selected="false">En vivo</button>
+    <button class="tab" data-tab="posiciones" role="tab" aria-selected="false">Posiciones</button>
+    <button class="tab" data-tab="historia" role="tab" aria-selected="false">Historia</button>
+    <button class="tab" data-tab="noticias" role="tab" aria-selected="false">Noticias</button>
+  </nav>
+
+  <main id="views">
+
+    <!-- ============ CALENDARIO ============ -->
+    <section id="view-calendario" class="view active">
+      <div id="next-race-card" class="hero-card skeleton">Cargando próxima carrera…</div>
+      <h2 class="section-title">Calendario completo</h2>
+      <div id="calendar-list" class="calendar-list skeleton-block">Cargando calendario…</div>
+    </section>
+
+    <!-- ============ EN VIVO ============ -->
+    <section id="view-vivo" class="view">
+      <div id="live-status-card" class="hero-card skeleton">Buscando sesión activa…</div>
+      <div id="live-content"></div>
+    </section>
+
+    <!-- ============ POSICIONES ============ -->
+    <section id="view-posiciones" class="view">
+      <div class="segmented" role="tablist" aria-label="Tipo de clasificación">
+        <button class="seg-btn active" data-standings="drivers">Pilotos</button>
+        <button class="seg-btn" data-standings="constructors">Constructores</button>
+      </div>
+      <div class="year-picker-row">
+        <label for="standings-year">Temporada</label>
+        <select id="standings-year"></select>
+      </div>
+      <div id="standings-table" class="standings-table skeleton-block">Cargando posiciones…</div>
+    </section>
+
+    <!-- ============ HISTORIA ============ -->
+    <section id="view-historia" class="view">
+      <div class="segmented" role="tablist" aria-label="Modo de búsqueda histórica">
+        <button class="seg-btn active" data-history="year">Por año</button>
+        <button class="seg-btn" data-history="circuit">Por Gran Premio</button>
+      </div>
+
+      <div id="history-year-controls" class="history-controls">
+        <label for="history-year">Año</label>
+        <select id="history-year"></select>
+      </div>
+
+      <div id="history-circuit-controls" class="history-controls" hidden>
+        <label for="history-circuit">Gran Premio</label>
+        <select id="history-circuit"></select>
+      </div>
+
+      <div id="history-content" class="skeleton-block">Seleccioná un año o un Gran Premio.</div>
+    </section>
+
+    <!-- ============ NOTICIAS ============ -->
+    <section id="view-noticias" class="view">
+      <div id="news-sources" class="news-sources"></div>
+      <div id="news-list" class="news-list skeleton-block">Cargando noticias…</div>
+    </section>
+
+  </main>
+
+  <footer id="app-footer">
+    <span>Datos: Jolpica-F1 (sucesor de Ergast) · OpenF1 · RSS de medios de F1</span>
+    <span class="footer-dot">·</span>
+    <span>No afiliado a Formula One Licensing B.V.</span>
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
