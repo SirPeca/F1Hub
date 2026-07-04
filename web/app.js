@@ -18,7 +18,8 @@ const state = {
 };
 
 // ---------- init ----------
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadConfig();
   setupTabs();
   setupStandingsControls();
   setupHistoryControls();
@@ -27,8 +28,30 @@ document.addEventListener('DOMContentLoaded', () => {
   setupAccount();
   setupCompare();
   setupPush();
+  handlePasswordResetLink();
   loadCalendar();
 });
+
+state.config = {
+  accounts: false, likesAndVotesAndFavorites: false, resilientCache: false,
+  oauthGoogle: false, oauthGithub: false, emailRecovery: false, pushNotifications: false,
+};
+
+async function loadConfig() {
+  try {
+    state.config = await fetchJSON('/api/config');
+  } catch { /* si falla, todo queda en false: se comporta como "nada configurado todavía" */ }
+
+  // Ocultar (no solo deshabilitar) lo que no tiene backend detrás —
+  // ver o tocar un botón muerto es peor que no verlo.
+  if (!state.config.accounts) {
+    document.getElementById('account-btn').hidden = true;
+    document.getElementById('notify-btn').hidden = true;
+  }
+  if (!state.config.likesAndVotesAndFavorites) {
+    document.getElementById('like-btn').hidden = true;
+  }
+}
 
 // =========================================
 // LIKES REALES (Fase A — persistidos en D1, ver functions/api/likes.js)
@@ -53,6 +76,7 @@ async function setupLikeButton() {
 
     try {
       const res = await fetch('/api/likes', { method: 'POST' });
+      if (!res.ok) throw new Error('bad status');
       const data = await res.json();
       renderLikeState(data);
     } catch {
@@ -565,6 +589,16 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
+
+  // Si un SW nuevo toma control (después de un deploy), recargamos una
+  // sola vez para asegurarnos de que el HTML/JS en pantalla sea el
+  // nuevo — evita el bug de "quedar pegado" en una versión vieja.
+  let reloadedOnce = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadedOnce) return;
+    reloadedOnce = true;
+    window.location.reload();
+  });
 }
 
 // =========================================
@@ -580,7 +614,7 @@ async function loadFavoriteKeys() {
 }
 
 function favStarHtml(kind, refId, label) {
-  if (!refId) return '';
+  if (!refId || !state.config.likesAndVotesAndFavorites) return '';
   const isFav = state.favoriteKeys.has(`${kind}:${refId}`);
   return `<button class="favorite-star ${isFav ? 'is-fav' : ''}" aria-label="Favorito" onclick="toggleFavorite('${kind}','${refId}',${JSON.stringify(label)},this)">★</button>`;
 }
@@ -593,16 +627,47 @@ async function toggleFavorite(kind, refId, label, btnEl) {
       body: JSON.stringify({ kind, refId, label }),
     });
     const data = await res.json();
+
+    if (!res.ok) {
+      btnEl.classList.toggle('is-fav'); // revertir el optimismo
+      toast(data.error === 'not_configured'
+        ? 'Los favoritos todavía no están activados en este sitio (falta configurar la base de datos).'
+        : 'No se pudo guardar el favorito. Probá de nuevo.');
+      return;
+    }
+
     const key = `${kind}:${refId}`;
     if (data.favorited) state.favoriteKeys.add(key); else state.favoriteKeys.delete(key);
     btnEl.classList.toggle('is-fav', Boolean(data.favorited));
   } catch {
     btnEl.classList.toggle('is-fav'); // revertir si falló
+    toast('No se pudo conectar. Probá de nuevo.');
   }
+}
+
+// Aviso corto y no intrusivo para errores que antes fallaban en silencio.
+let toastTimer = null;
+function toast(message) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible'), 4000);
 }
 
 async function loadFavorites() {
   const el = document.getElementById('favorites-list');
+  if (!state.config.likesAndVotesAndFavorites) {
+    el.classList.remove('skeleton-block');
+    el.innerHTML = `<div class="live-empty">Próximamente — esta función necesita que el sitio tenga la base de datos configurada.</div>`;
+    return;
+  }
   el.classList.add('skeleton-block');
   try {
     const data = await fetchJSON('/api/favorites');
@@ -806,6 +871,11 @@ function renderAccountOverlay() {
   }
 
   titleEl.textContent = 'Ingresar';
+  const oauthButtons = [
+    state.config.oauthGoogle ? `<a href="/api/auth/oauth/google" class="oauth-btn">Continuar con Google</a>` : '',
+    state.config.oauthGithub ? `<a href="/api/auth/oauth/github" class="oauth-btn">Continuar con GitHub</a>` : '',
+  ].filter(Boolean).join('');
+
   el.innerHTML = `
     <form id="auth-form" class="auth-form">
       <input type="email" id="auth-email" placeholder="Email" required>
@@ -814,16 +884,91 @@ function renderAccountOverlay() {
       <div id="auth-error" class="auth-error"></div>
       <button type="submit" class="retry-btn" style="width:100%">Ingresar</button>
       <button type="button" id="auth-register-btn" class="retry-btn-inline" style="width:100%;margin-top:8px;text-align:center">Crear cuenta nueva</button>
+      <button type="button" id="auth-forgot-btn" class="auth-forgot-link">¿Olvidaste tu contraseña?</button>
     </form>
-    <div class="oauth-row">
-      <a href="/api/auth/oauth/google" class="oauth-btn">Continuar con Google</a>
-      <a href="/api/auth/oauth/github" class="oauth-btn">Continuar con GitHub</a>
-    </div>
+    ${oauthButtons ? `<div class="oauth-row">${oauthButtons}</div>` : ''}
   `;
 
   const form = document.getElementById('auth-form');
   form.addEventListener('submit', (e) => { e.preventDefault(); submitAuth('/api/auth/login'); });
   document.getElementById('auth-register-btn').addEventListener('click', () => submitAuth('/api/auth/register'));
+  document.getElementById('auth-forgot-btn').addEventListener('click', showForgotPasswordForm);
+}
+
+function showForgotPasswordForm() {
+  document.getElementById('account-title').textContent = 'Recuperar contraseña';
+  document.getElementById('account-content').innerHTML = `
+    <form id="forgot-form" class="auth-form">
+      <input type="email" id="forgot-email" placeholder="Tu email" required>
+      <div id="forgot-msg" class="auth-error" style="color:var(--sub)"></div>
+      <button type="submit" class="retry-btn" style="width:100%">Enviar link de recuperación</button>
+      <button type="button" id="forgot-back" class="retry-btn-inline" style="width:100%;margin-top:8px;text-align:center">Volver</button>
+    </form>
+  `;
+  document.getElementById('forgot-back').addEventListener('click', renderAccountOverlay);
+  document.getElementById('forgot-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('forgot-email').value;
+    const msgEl = document.getElementById('forgot-msg');
+    msgEl.style.color = 'var(--sub)';
+    msgEl.textContent = 'Enviando…';
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.sent) {
+        msgEl.textContent = 'Listo — si el email existe, te llegó un link para elegir una contraseña nueva.';
+      } else {
+        msgEl.style.color = 'var(--red-hi)';
+        msgEl.textContent = 'La recuperación por email todavía no está activada en este sitio. Contactá al administrador.';
+      }
+    } catch {
+      msgEl.style.color = 'var(--red-hi)';
+      msgEl.textContent = 'No se pudo conectar. Probá de nuevo.';
+    }
+  });
+}
+
+/** Si la URL trae ?resetToken=..., abre directamente el formulario de
+ * "elegir nueva contraseña" (llega acá desde el link del email). */
+function handlePasswordResetLink() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('resetToken');
+  if (!token) return;
+
+  document.getElementById('account-overlay').hidden = false;
+  document.getElementById('account-title').textContent = 'Elegir nueva contraseña';
+  document.getElementById('account-content').innerHTML = `
+    <form id="reset-form" class="auth-form">
+      <input type="password" id="reset-password" placeholder="Contraseña nueva" minlength="8" required>
+      <div id="reset-msg" class="auth-error"></div>
+      <button type="submit" class="retry-btn" style="width:100%">Guardar</button>
+    </form>
+  `;
+  document.getElementById('reset-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const newPassword = document.getElementById('reset-password').value;
+    const msgEl = document.getElementById('reset-msg');
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, newPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        msgEl.style.color = 'var(--sub)';
+        msgEl.textContent = 'Contraseña actualizada — ya podés iniciar sesión.';
+        window.history.replaceState({}, '', '/'); // saca el token de la URL
+        setTimeout(renderAccountOverlay, 1200);
+      } else {
+        msgEl.style.color = 'var(--red-hi)';
+        msgEl.textContent = data.error === 'invalid_or_expired_token' ? 'El link venció o ya se usó. Pedí uno nuevo.' : 'No se pudo actualizar la contraseña.';
+      }
+    } catch {
+      msgEl.style.color = 'var(--red-hi)';
+      msgEl.textContent = 'No se pudo conectar.';
+    }
+  });
 }
 
 async function submitAuth(endpoint) {
@@ -869,10 +1014,22 @@ function friendlyAuthError(code) {
 // =========================================
 async function loadPoll() {
   const el = document.getElementById('poll-widget');
+  if (!state.config.likesAndVotesAndFavorites) { el.innerHTML = ''; return; }
+  clearInterval(state.pollCountdownTimer);
+  clearInterval(state.pollRefreshTimer);
   try {
     const data = await fetchJSON('/api/poll');
     if (!data.configured || !data.poll) { el.innerHTML = ''; return; }
     renderPoll(data.poll);
+
+    // Mientras esté abierta, refrescamos los porcentajes solos cada 20s
+    // (misma cadencia que En Vivo) para que se sienta "viva".
+    if (data.poll.isOpen) {
+      state.pollRefreshTimer = setInterval(async () => {
+        if (state.activeTab !== 'calendario') return;
+        try { const fresh = await fetchJSON('/api/poll'); if (fresh.poll) renderPoll(fresh.poll); } catch {}
+      }, 20000);
+    }
   } catch { el.innerHTML = ''; }
 }
 
@@ -883,37 +1040,70 @@ function renderPoll(poll) {
   if (!poll.options.length) { el.innerHTML = ''; return; }
 
   if (poll.isClosed) {
-    el.innerHTML = `<div class="poll-card">
+    const winner = poll.options.find((o) => o.driverId === poll.winnerDriverId);
+    const yourVoteOption = poll.options.find((o) => o.driverId === poll.yourVote);
+    const hitRate = winner ? winner.percentage : null;
+    el.innerHTML = `<div class="poll-card poll-closed">
+      <div class="poll-eyebrow">🏆 Encuesta cerrada</div>
       <div class="poll-title">${question}</div>
-      <div class="poll-closed-note">Votación cerrada · ${poll.totalVotes} votos totales
-        ${poll.winnerDriverId ? ` · Ganó ${poll.options.find(o => o.driverId === poll.winnerDriverId)?.name ?? poll.winnerDriverId}` : ''}
+      <div class="poll-closed-note">${poll.totalVotes} personas votaron
+        ${winner ? ` · ganó <b>${winner.name}</b> (lo eligió el ${hitRate}% de la comunidad)` : ' · resultado real todavía no está cargado'}
+        ${poll.yourVote ? (poll.yourVote === poll.winnerDriverId ? ' · ¡acertaste! 🎉' : ` · vos votaste ${yourVoteOption?.name ?? ''}`) : ''}
       </div>
     </div>`;
     return;
   }
 
-  el.innerHTML = `<div class="poll-card">
+  el.innerHTML = `<div class="poll-card poll-open">
+    <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
     <div class="poll-title">${question}</div>
-    <div class="poll-sub">${poll.totalVotes} votos · ${poll.yourVote ? 'ya votaste, podés cambiar tu voto' : 'un voto por persona'}</div>
+    <div class="poll-meta-row">
+      <span>👥 ${poll.totalVotes} ${poll.totalVotes === 1 ? 'voto' : 'votos'}</span>
+      <span id="poll-countdown">cierra en —</span>
+    </div>
     ${poll.options.map((o) => `
       <div class="poll-option ${poll.yourVote === o.driverId ? 'selected' : ''}">
         <div class="poll-option-fill" style="width:${o.percentage}%"></div>
         <button onclick="votePoll(${poll.id},'${o.driverId}')">
-          <div class="poll-option-row"><span>${o.name}</span><span>${o.percentage}% (${o.votes})</span></div>
+          <div class="poll-option-row"><span>${poll.yourVote === o.driverId ? '✓ ' : ''}${o.name}</span><span>${o.percentage}% (${o.votes})</span></div>
         </button>
       </div>
     `).join('')}
+    <div class="poll-footer-note">${poll.yourVote ? 'Ya votaste — podés cambiar tu elección mientras la encuesta siga abierta.' : 'Un voto por persona. Se cierra apenas larga la sesión.'}</div>
   </div>`;
+
+  startPollCountdown(new Date(poll.closesAt));
+}
+
+function startPollCountdown(target) {
+  const el = document.getElementById('poll-countdown');
+  if (!el) return;
+  const tick = () => {
+    const diff = target.getTime() - Date.now();
+    if (diff <= 0) { el.textContent = 'cerrando…'; clearInterval(state.pollCountdownTimer); loadPoll(); return; }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    el.textContent = h > 0 ? `cierra en ${h}h ${m}m` : `cierra en ${m}m`;
+  };
+  tick();
+  state.pollCountdownTimer = setInterval(tick, 30000);
 }
 
 async function votePoll(pollId, driverId) {
   try {
-    await fetch('/api/poll', {
+    const res = await fetch('/api/poll', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pollId, driverId }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error === 'poll_closed' ? 'La votación ya cerró para este Gran Premio.' : 'No se pudo registrar tu voto. Probá de nuevo.');
+      return;
+    }
     loadPoll();
-  } catch { /* si falla, el usuario puede reintentar tocando de nuevo */ }
+  } catch {
+    toast('No se pudo conectar. Probá de nuevo.');
+  }
 }
 
 // =========================================
@@ -962,6 +1152,8 @@ async function subscribePush() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(subscription.toJSON()),
     });
+
+    toast('Avisos activados. Nota: solo van a llegar si el sitio ya tiene desplegado el servicio de notificaciones (cron-worker) — si no estás seguro, preguntale al administrador del sitio.');
   } catch (err) {
     console.warn('No se pudo activar notificaciones:', err);
   }
