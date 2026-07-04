@@ -22,13 +22,67 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupStandingsControls();
   setupHistoryControls();
+  setupLikeButton();
+  setupSearch();
+  setupAccount();
+  setupCompare();
+  setupPush();
   loadCalendar();
 });
 
+// =========================================
+// LIKES REALES (Fase A — persistidos en D1, ver functions/api/likes.js)
+// =========================================
+async function setupLikeButton() {
+  const btn = document.getElementById('like-btn');
+  const countEl = document.getElementById('like-count');
+  const iconEl = document.getElementById('like-icon');
+
+  try {
+    const data = await fetchJSON('/api/likes');
+    renderLikeState(data);
+  } catch {
+    countEl.textContent = '—';
+  }
+
+  btn.addEventListener('click', async () => {
+    // Optimistic UI: respondemos al toque antes de esperar la red
+    const wasPressed = btn.getAttribute('aria-pressed') === 'true';
+    const currentCount = Number(countEl.textContent) || 0;
+    renderLikeState({ likedByYou: !wasPressed, total: currentCount + (wasPressed ? -1 : 1) });
+
+    try {
+      const res = await fetch('/api/likes', { method: 'POST' });
+      const data = await res.json();
+      renderLikeState(data);
+    } catch {
+      renderLikeState({ likedByYou: wasPressed, total: currentCount }); // revertir si falló
+    }
+  });
+
+  function renderLikeState(data) {
+    btn.setAttribute('aria-pressed', String(Boolean(data.likedByYou)));
+    countEl.textContent = data.total ?? '—';
+    iconEl.textContent = data.likedByYou ? '🔴' : '🏁';
+  }
+}
+
 function setupTabs() {
   const tabs = document.querySelectorAll('.tab');
-  tabs.forEach((btn) => {
+  tabs.forEach((btn, i) => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') { e.preventDefault(); tabs[(i + 1) % tabs.length].focus(); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); tabs[(i - 1 + tabs.length) % tabs.length].focus(); }
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    ['search-overlay', 'account-overlay'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el.hidden) el.hidden = true;
+    });
   });
 }
 
@@ -45,6 +99,7 @@ function switchTab(tab) {
   if (tab === 'posiciones') loadStandings();
   if (tab === 'historia') loadHistoryYear();
   if (tab === 'noticias') loadNews();
+  if (tab === 'favoritos') loadFavorites();
 }
 
 async function fetchJSON(url) {
@@ -81,14 +136,41 @@ async function loadCalendar() {
   const listEl = document.getElementById('calendar-list');
   try {
     calendarData = await fetchJSON('/api/calendar');
+
+    if (calendarData.unavailable) {
+      renderUnavailable(heroEl, listEl, 'calendario');
+      return;
+    }
+
     document.getElementById('season-label').textContent = `Temporada ${calendarData.season}`;
     renderHero();
     renderCalendarList();
     updateHeaderStatus();
+    loadPoll();
+    if (calendarData.stale) showStaleBanner(heroEl);
   } catch (err) {
-    heroEl.textContent = 'No se pudo cargar el calendario. Reintentá en unos minutos.';
-    listEl.textContent = '';
+    renderUnavailable(heroEl, listEl, 'calendario');
   }
+}
+
+// Estado "el proveedor de datos está caído y no hay respaldo": nunca
+// dejamos la pantalla en blanco, siempre con una acción clara (reintentar).
+function renderUnavailable(heroEl, secondaryEl, label) {
+  heroEl.classList.remove('skeleton');
+  heroEl.innerHTML = `
+    <div class="hero-eyebrow"><span class="dot"></span>SERVICIO NO DISPONIBLE</div>
+    <div class="hero-title">No pudimos traer el ${label} en este momento</div>
+    <div class="hero-meta">El proveedor de datos (Jolpica-F1) está temporalmente caído. Esto no depende del sitio — reintentá en unos minutos.</div>
+    <button class="retry-btn" onclick="location.reload()">Reintentar</button>
+  `;
+  if (secondaryEl) { secondaryEl.classList.remove('skeleton-block'); secondaryEl.innerHTML = ''; }
+}
+
+function showStaleBanner(container) {
+  const badge = document.createElement('div');
+  badge.className = 'stale-banner';
+  badge.textContent = '⚠️ Mostrando la última copia guardada — el proveedor de datos está lento o caído, reintentando en segundo plano.';
+  container.prepend(badge);
 }
 
 function renderHero() {
@@ -300,11 +382,17 @@ async function loadStandings() {
   try {
     const data = await fetchJSON(`/api/standings?type=${type}&year=${year}`);
     el.classList.remove('skeleton-block');
+
+    if (data.unavailable) {
+      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadStandings()">Reintentar</button></div>`;
+      return;
+    }
     if (!data.standings.length) {
       el.innerHTML = `<div class="live-empty">${data.note || 'Sin datos para esta temporada.'}</div>`;
       return;
     }
-    el.innerHTML = data.standings.map((s) => {
+    const staleNote = data.stale ? `<div class="stale-banner">⚠️ Datos guardados — actualizando en segundo plano.</div>` : '';
+    el.innerHTML = staleNote + data.standings.map((s) => {
       if (type === 'drivers') {
         return `<div class="st-row ${s.position <= 3 ? 'top3' : ''}">
           <span class="st-pos">${s.position}</span>
@@ -313,6 +401,7 @@ async function loadStandings() {
             <div class="st-sub"><span class="team-dot" style="background:${teamColor(s.constructors[0])}"></span>${s.constructors.join(' / ')}</div>
           </div>
           <div><span class="st-points">${s.points}</span><span class="st-wins">${s.wins} victorias</span></div>
+          ${favStarHtml('driver', s.driverId, s.name)}
         </div>`;
       }
       return `<div class="st-row ${s.position <= 3 ? 'top3' : ''}">
@@ -321,6 +410,7 @@ async function loadStandings() {
           <div class="st-name"><span class="team-dot" style="background:${teamColor(s.name)};display:inline-block;margin-right:6px"></span>${s.name}</div>
         </div>
         <div><span class="st-points">${s.points}</span><span class="st-wins">${s.wins} victorias</span></div>
+        ${favStarHtml('constructor', s.constructorId, s.name)}
       </div>`;
     }).join('');
   } catch {
@@ -332,8 +422,6 @@ async function loadStandings() {
 // =========================================
 // HISTORIA
 // =========================================
-let circuitsCache = null;
-
 function setupHistoryControls() {
   document.querySelectorAll('[data-history]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -359,7 +447,6 @@ async function loadCircuitOptions() {
   const sel = document.getElementById('history-circuit');
   try {
     const data = await fetchJSON('/api/history?mode=circuits');
-    circuitsCache = data.circuits;
     sel.innerHTML = data.circuits.map((c) => `<option value="${c.id}">${c.name} (${c.country})</option>`).join('');
   } catch {
     sel.innerHTML = '<option value="">No se pudo cargar la lista</option>';
@@ -375,7 +462,14 @@ async function loadHistoryYear() {
   try {
     const data = await fetchJSON(`/api/history?mode=year&year=${year}`);
     el.classList.remove('skeleton-block');
-    el.innerHTML = `
+
+    if (data.unavailable) {
+      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadHistoryYear()">Reintentar</button></div>`;
+      return;
+    }
+
+    const staleNote = data.stale ? `<div class="stale-banner">⚠️ Datos guardados — actualizando en segundo plano.</div>` : '';
+    el.innerHTML = staleNote + `
       <div class="champ-cards">
         <div class="champ-card">
           <div class="champ-label">Campeón pilotos</div>
@@ -414,11 +508,16 @@ async function loadHistoryCircuit() {
   try {
     const data = await fetchJSON(`/api/history?mode=circuit&circuit=${circuit}`);
     el.classList.remove('skeleton-block');
+
+    if (data.unavailable) {
+      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadHistoryCircuit()">Reintentar</button></div>`;
+      return;
+    }
     if (!data.winners.length) {
       el.innerHTML = `<div class="live-empty">Sin datos históricos para este circuito.</div>`;
       return;
     }
-    el.innerHTML = `<h3 class="section-title" style="margin-top:0">${data.circuitName}</h3>` +
+    el.innerHTML = `<h3 class="section-title" style="margin-top:0">${data.circuitName} ${favStarHtml('circuit', circuit, data.circuitName)}</h3>` +
       data.winners.map((w) => `
         <div class="circuit-winner-row">
           <span class="cw-year">${w.season}</span>
@@ -466,4 +565,427 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
+}
+
+// =========================================
+// FAVORITOS (Fase C)
+// =========================================
+state.favoriteKeys = new Set();
+
+async function loadFavoriteKeys() {
+  try {
+    const data = await fetchJSON('/api/favorites');
+    state.favoriteKeys = new Set((data.favorites || []).map((f) => `${f.kind}:${f.refId}`));
+  } catch { /* si falla, simplemente no se muestran estrellas marcadas */ }
+}
+
+function favStarHtml(kind, refId, label) {
+  if (!refId) return '';
+  const isFav = state.favoriteKeys.has(`${kind}:${refId}`);
+  return `<button class="favorite-star ${isFav ? 'is-fav' : ''}" aria-label="Favorito" onclick="toggleFavorite('${kind}','${refId}',${JSON.stringify(label)},this)">★</button>`;
+}
+
+async function toggleFavorite(kind, refId, label, btnEl) {
+  btnEl.classList.toggle('is-fav'); // optimista
+  try {
+    const res = await fetch('/api/favorites', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, refId, label }),
+    });
+    const data = await res.json();
+    const key = `${kind}:${refId}`;
+    if (data.favorited) state.favoriteKeys.add(key); else state.favoriteKeys.delete(key);
+    btnEl.classList.toggle('is-fav', Boolean(data.favorited));
+  } catch {
+    btnEl.classList.toggle('is-fav'); // revertir si falló
+  }
+}
+
+async function loadFavorites() {
+  const el = document.getElementById('favorites-list');
+  el.classList.add('skeleton-block');
+  try {
+    const data = await fetchJSON('/api/favorites');
+    el.classList.remove('skeleton-block');
+    const favs = data.favorites || [];
+    if (!favs.length) { el.innerHTML = ''; return; }
+
+    const groups = { driver: 'Pilotos', constructor: 'Equipos', circuit: 'Circuitos' };
+    el.innerHTML = Object.entries(groups).map(([kind, title]) => {
+      const items = favs.filter((f) => f.kind === kind);
+      if (!items.length) return '';
+      return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
+        <div class="favorite-row">
+          <span>${f.label}</span>
+          <button class="favorite-star is-fav" onclick="toggleFavorite('${f.kind}','${f.refId}',${JSON.stringify(f.label)},this); this.closest('.favorite-row').remove()">★</button>
+        </div>
+      `).join('');
+    }).join('');
+  } catch {
+    el.classList.remove('skeleton-block');
+    el.innerHTML = `<div class="live-empty">No se pudieron cargar los favoritos.</div>`;
+  }
+}
+
+// =========================================
+// COMPARADOR (Fase C)
+// =========================================
+const compareSelection = { a: null, b: null };
+
+function setupCompare() {
+  wireCompareInput('a');
+  wireCompareInput('b');
+}
+
+function wireCompareInput(side) {
+  const input = document.getElementById(`compare-${side}`);
+  const resultsEl = document.getElementById(`compare-${side}-results`);
+  let debounce;
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = input.value.trim();
+    compareSelection[side] = null;
+    if (q.length < 2) { resultsEl.hidden = true; return; }
+    debounce = setTimeout(async () => {
+      try {
+        const data = await fetchJSON(`/api/search?q=${encodeURIComponent(q)}`);
+        const drivers = data.drivers || [];
+        resultsEl.hidden = drivers.length === 0;
+        resultsEl.innerHTML = drivers.map((d) =>
+          `<div class="autocomplete-item" onclick="selectCompareDriver('${side}','${d.id}','${d.label.replace(/'/g, "\\'")}')">${d.label}</div>`
+        ).join('');
+      } catch { resultsEl.hidden = true; }
+    }, 250);
+  });
+}
+
+function selectCompareDriver(side, id, label) {
+  compareSelection[side] = id;
+  document.getElementById(`compare-${side}`).value = label;
+  document.getElementById(`compare-${side}-results`).hidden = true;
+  if (compareSelection.a && compareSelection.b) runCompare();
+}
+
+async function runCompare() {
+  const el = document.getElementById('compare-result');
+  el.innerHTML = '<div class="skeleton-block">Comparando…</div>';
+  try {
+    const [data, mediaA, mediaB] = await Promise.all([
+      fetchJSON(`/api/compare?a=${compareSelection.a}&b=${compareSelection.b}`),
+      fetchJSON(`/api/media?q=${encodeURIComponent(document.getElementById('compare-a').value)}`).catch(() => ({ found: false })),
+      fetchJSON(`/api/media?q=${encodeURIComponent(document.getElementById('compare-b').value)}`).catch(() => ({ found: false })),
+    ]);
+    const rows = [
+      ['championships', 'Campeonatos'], ['wins', 'Victorias'], ['podiums', 'Podios'], ['poles', 'Poles'], ['seasons', 'Temporadas'],
+    ];
+    el.innerHTML = `
+      <div class="compare-header">
+        <span class="ch-name">${mediaA.found ? `<img class="ch-photo" loading="lazy" src="${mediaA.thumbnailUrl}" alt="${data.a.name}">` : ''}${data.a.name}</span>
+        <span class="ch-name">${data.b.name}${mediaB.found ? `<img class="ch-photo" loading="lazy" src="${mediaB.thumbnailUrl}" alt="${data.b.name}">` : ''}</span>
+      </div>
+      ${rows.map(([key, label]) => {
+        const av = data.a[key] ?? '—', bv = data.b[key] ?? '—';
+        const aWin = typeof av === 'number' && typeof bv === 'number' && av > bv;
+        const bWin = typeof av === 'number' && typeof bv === 'number' && bv > av;
+        return `<div class="compare-stat-row">
+          <div class="compare-stat-val ${aWin ? 'win' : ''}" style="text-align:left">${av}</div>
+          <div class="compare-stat-label">${label}</div>
+          <div class="compare-stat-val ${bWin ? 'win' : ''}" style="text-align:right">${bv}</div>
+        </div>`;
+      }).join('')}
+      <p class="favorites-hint">${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
+    `;
+  } catch {
+    el.innerHTML = `<div class="live-empty">No se pudo comparar en este momento.</div>`;
+  }
+}
+
+// =========================================
+// BÚSQUEDA GLOBAL
+// =========================================
+function setupSearch() {
+  const btn = document.getElementById('search-btn');
+  const overlay = document.getElementById('search-overlay');
+  const closeBtn = document.getElementById('search-close');
+  const input = document.getElementById('search-input');
+  const resultsEl = document.getElementById('search-results');
+  let debounce;
+
+  btn.addEventListener('click', () => { overlay.hidden = false; input.focus(); });
+  closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = input.value.trim();
+    if (q.length < 2) { resultsEl.innerHTML = ''; return; }
+    debounce = setTimeout(async () => {
+      try {
+        const data = await fetchJSON(`/api/search?q=${encodeURIComponent(q)}`);
+        resultsEl.innerHTML = renderSearchGroup('Pilotos', data.drivers) +
+          renderSearchGroup('Equipos', data.constructors) + renderSearchGroup('Circuitos', data.circuits);
+      } catch {
+        resultsEl.innerHTML = `<div class="live-empty">No se pudo buscar en este momento.</div>`;
+      }
+    }, 250);
+  });
+}
+
+function renderSearchGroup(label, items) {
+  if (!items || !items.length) return '';
+  return `<div class="search-result-group">
+    <div class="search-result-group-label">${label}</div>
+    ${items.map((it) => `<div class="search-result-item" onclick="onSearchResultClick('${it.type}','${it.id}')">
+      <span>${it.label}</span><span class="sr-sub">${it.sub || ''}</span>
+    </div>`).join('')}
+  </div>`;
+}
+
+function onSearchResultClick(type, id) {
+  document.getElementById('search-overlay').hidden = true;
+  if (type === 'driver') {
+    switchTab('comparar');
+    document.getElementById('compare-a').focus();
+  } else if (type === 'constructor') {
+    switchTab('posiciones');
+    document.querySelector('[data-standings="constructors"]').click();
+  } else if (type === 'circuit') {
+    switchTab('historia');
+    document.querySelector('[data-history="circuit"]').click();
+    const sel = document.getElementById('history-circuit');
+    sel.value = id;
+    sel.dispatchEvent(new Event('change'));
+  }
+}
+
+// =========================================
+// CUENTA (Fase D — login/registro/perfil)
+// =========================================
+state.currentUser = null;
+
+async function setupAccount() {
+  const btn = document.getElementById('account-btn');
+  const overlay = document.getElementById('account-overlay');
+  const closeBtn = document.getElementById('account-close');
+
+  btn.addEventListener('click', () => { overlay.hidden = false; renderAccountOverlay(); });
+  closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+
+  try {
+    const data = await fetchJSON('/api/auth/me');
+    state.currentUser = data.user;
+    btn.classList.toggle('is-logged', Boolean(data.user));
+  } catch { /* sin sesión activa, se trata como anónimo */ }
+
+  loadFavoriteKeys();
+}
+
+function renderAccountOverlay() {
+  const titleEl = document.getElementById('account-title');
+  const el = document.getElementById('account-content');
+
+  if (state.currentUser) {
+    titleEl.textContent = 'Mi cuenta';
+    el.innerHTML = `
+      <div class="account-profile">
+        <div class="hero-title" style="font-size:16px">${state.currentUser.nickname || state.currentUser.email}</div>
+        <div class="hero-meta">${state.currentUser.email}</div>
+        ${state.currentUser.isAdmin ? '<p class="favorites-hint">Tenés permisos de administrador — <a href="/admin.html" style="color:var(--gold)">ir al panel</a>.</p>' : ''}
+        <button class="retry-btn" style="width:100%;margin-top:16px" id="logout-btn">Cerrar sesión</button>
+      </div>
+    `;
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      state.currentUser = null;
+      document.getElementById('account-btn').classList.remove('is-logged');
+      document.getElementById('account-overlay').hidden = true;
+    });
+    return;
+  }
+
+  titleEl.textContent = 'Ingresar';
+  el.innerHTML = `
+    <form id="auth-form" class="auth-form">
+      <input type="email" id="auth-email" placeholder="Email" required>
+      <input type="password" id="auth-password" placeholder="Contraseña" minlength="8" required>
+      <input type="text" id="auth-nickname" placeholder="Nombre (solo para registrarte)">
+      <div id="auth-error" class="auth-error"></div>
+      <button type="submit" class="retry-btn" style="width:100%">Ingresar</button>
+      <button type="button" id="auth-register-btn" class="retry-btn-inline" style="width:100%;margin-top:8px;text-align:center">Crear cuenta nueva</button>
+    </form>
+    <div class="oauth-row">
+      <a href="/api/auth/oauth/google" class="oauth-btn">Continuar con Google</a>
+      <a href="/api/auth/oauth/github" class="oauth-btn">Continuar con GitHub</a>
+    </div>
+  `;
+
+  const form = document.getElementById('auth-form');
+  form.addEventListener('submit', (e) => { e.preventDefault(); submitAuth('/api/auth/login'); });
+  document.getElementById('auth-register-btn').addEventListener('click', () => submitAuth('/api/auth/register'));
+}
+
+async function submitAuth(endpoint) {
+  const email = document.getElementById('auth-email').value;
+  const password = document.getElementById('auth-password').value;
+  const nickname = document.getElementById('auth-nickname').value;
+  const errorEl = document.getElementById('auth-error');
+  errorEl.textContent = '';
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, nickname }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errorEl.textContent = friendlyAuthError(data.error);
+      return;
+    }
+    state.currentUser = data.user;
+    document.getElementById('account-btn').classList.add('is-logged');
+    renderAccountOverlay();
+    loadFavoriteKeys();
+  } catch {
+    errorEl.textContent = 'No se pudo conectar. Probá de nuevo.';
+  }
+}
+
+function friendlyAuthError(code) {
+  const map = {
+    invalid_credentials: 'Email o contraseña incorrectos.',
+    email_taken: 'Ya existe una cuenta con ese email.',
+    weak_password: 'La contraseña debe tener al menos 8 caracteres.',
+    invalid_email: 'Ese email no parece válido.',
+    rate_limited: 'Demasiados intentos. Probá de nuevo en unos minutos.',
+    not_configured: 'Las cuentas todavía no están activadas en este sitio.',
+  };
+  return map[code] || 'Algo salió mal. Probá de nuevo.';
+}
+
+// =========================================
+// ENCUESTA DEL GP (Fase A)
+// =========================================
+async function loadPoll() {
+  const el = document.getElementById('poll-widget');
+  try {
+    const data = await fetchJSON('/api/poll');
+    if (!data.configured || !data.poll) { el.innerHTML = ''; return; }
+    renderPoll(data.poll);
+  } catch { el.innerHTML = ''; }
+}
+
+function renderPoll(poll) {
+  const el = document.getElementById('poll-widget');
+  const question = poll.sessionType === 'sprint' ? `¿Quién ganará la Sprint?` : `¿Quién ganará el ${poll.raceName}?`;
+
+  if (!poll.options.length) { el.innerHTML = ''; return; }
+
+  if (poll.isClosed) {
+    el.innerHTML = `<div class="poll-card">
+      <div class="poll-title">${question}</div>
+      <div class="poll-closed-note">Votación cerrada · ${poll.totalVotes} votos totales
+        ${poll.winnerDriverId ? ` · Ganó ${poll.options.find(o => o.driverId === poll.winnerDriverId)?.name ?? poll.winnerDriverId}` : ''}
+      </div>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = `<div class="poll-card">
+    <div class="poll-title">${question}</div>
+    <div class="poll-sub">${poll.totalVotes} votos · ${poll.yourVote ? 'ya votaste, podés cambiar tu voto' : 'un voto por persona'}</div>
+    ${poll.options.map((o) => `
+      <div class="poll-option ${poll.yourVote === o.driverId ? 'selected' : ''}">
+        <div class="poll-option-fill" style="width:${o.percentage}%"></div>
+        <button onclick="votePoll(${poll.id},'${o.driverId}')">
+          <div class="poll-option-row"><span>${o.name}</span><span>${o.percentage}% (${o.votes})</span></div>
+        </button>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+async function votePoll(pollId, driverId) {
+  try {
+    await fetch('/api/poll', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pollId, driverId }),
+    });
+    loadPoll();
+  } catch { /* si falla, el usuario puede reintentar tocando de nuevo */ }
+}
+
+// =========================================
+// NOTIFICACIONES PUSH
+//
+// Clave pública VAPID — es información pública por diseño (la privada
+// vive SOLO como secret en cron-worker, nunca acá). Si regenerás el
+// par de claves, actualizá esta constante para que coincida.
+// =========================================
+const VAPID_PUBLIC_KEY = 'BLz0gv6C_2sAzmsbf_YA8x3OD9P50O9GdjV_Tsy72QgNmZe1niqotskk_ZkSEGpHPrB8onSFWI7cYpjn6Ss7wfA';
+
+function setupPush() {
+  const btn = document.getElementById('notify-btn');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) { btn.hidden = true; return; }
+
+  updatePushButtonState();
+  btn.addEventListener('click', async () => {
+    if (Notification.permission === 'granted') {
+      await unsubscribePush();
+    } else {
+      await subscribePush();
+    }
+    updatePushButtonState();
+  });
+}
+
+async function updatePushButtonState() {
+  const btn = document.getElementById('notify-btn');
+  const isOn = 'Notification' in window && Notification.permission === 'granted';
+  btn.classList.toggle('is-logged', isOn);
+  btn.title = isOn ? 'Notificaciones activadas (tocá para desactivar)' : 'Activar avisos antes de cada sesión';
+}
+
+async function subscribePush() {
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+
+    const reg = await navigator.serviceWorker.ready;
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+
+    await fetch('/api/push/subscribe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription.toJSON()),
+    });
+  } catch (err) {
+    console.warn('No se pudo activar notificaciones:', err);
+  }
+}
+
+async function unsubscribePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const subscription = await reg.pushManager.getSubscription();
+    if (subscription) {
+      await fetch('/api/push/unsubscribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      });
+      await subscription.unsubscribe();
+    }
+  } catch (err) {
+    console.warn('No se pudo desactivar notificaciones:', err);
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }

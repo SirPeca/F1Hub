@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>F1 Hub · Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  #admin-app{max-width:760px;margin:0 auto;padding:24px 18px calc(24px + var(--sai-b))}
+  .admin-title{font-size:20px;font-weight:900;margin-bottom:4px}
+  .admin-sub{font-size:12px;color:var(--sub);margin-bottom:20px}
+  .admin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px}
+  .admin-stat{background:var(--bg1);border:1px solid var(--bord);border-radius:10px;padding:14px;text-align:center}
+  .admin-stat-num{font-family:var(--mono);font-size:22px;font-weight:700}
+  .admin-stat-label{font-size:10px;color:var(--dim);text-transform:uppercase;margin-top:4px}
+  .admin-poll-row{padding:10px 12px;background:var(--bg1);border-radius:8px;margin-bottom:6px;border:1px solid var(--bord-soft);font-size:12.5px;display:flex;justify-content:space-between}
+  .gate{text-align:center;padding:60px 20px}
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div id="admin-app">
+  <div id="gate" class="gate">Verificando acceso…</div>
+  <div id="admin-content" hidden>
+    <div class="admin-title">Panel de administración</div>
+    <div class="admin-sub">Métricas propias de F1 Hub. Para visitas/países/dispositivos, ver <a href="https://dash.cloudflare.com" style="color:var(--gold)">Cloudflare Web Analytics</a>.</div>
+    <div class="admin-grid" id="admin-grid"></div>
+    <h2 class="section-title">Últimas votaciones por GP</h2>
+    <div id="admin-polls"></div>
+  </div>
+</div>
+<script>
+async function init() {
+  const gate = document.getElementById('gate');
+  try {
+    const me = await (await fetch('/api/auth/me')).json();
+    if (!me.user) { gate.innerHTML = 'Necesitás iniciar sesión desde el sitio principal (<a href="/" style="color:var(--gold)">volver</a>) y después entrar acá.'; return; }
+    if (!me.user.isAdmin) { gate.innerHTML = 'Tu cuenta no tiene permisos de administrador.'; return; }
+
+    const res = await fetch('/api/admin/stats');
+    if (!res.ok) { gate.innerHTML = 'No se pudo cargar el panel (¿D1 está bindeado?).'; return; }
+    const stats = await res.json();
+
+    gate.hidden = true;
+    document.getElementById('admin-content').hidden = false;
+    document.getElementById('admin-grid').innerHTML = `
+      <div class="admin-stat"><div class="admin-stat-num">${stats.identitiesTotal}</div><div class="admin-stat-label">Identidades</div></div>
+      <div class="admin-stat"><div class="admin-stat-num">${stats.usersTotal}</div><div class="admin-stat-label">Cuentas</div></div>
+      <div class="admin-stat"><div class="admin-stat-num">${stats.likesTotal}</div><div class="admin-stat-label">Likes</div></div>
+    `;
+    document.getElementById('admin-polls').innerHTML = (stats.recentPolls || []).map(p => `
+      <div class="admin-poll-row">
+        <span>${p.season} · Ronda ${p.round} (${p.session_type})</span>
+        <span>${p.total_votes} votos ${p.winner_driver_id ? '· ganador: ' + p.winner_driver_id : ''}</span>
+      </div>
+    `).join('') || '<p class="favorites-hint">Todavía no hay votaciones registradas.</p>';
+  } catch (e) {
+    gate.textContent = 'Error de conexión.';
+  }
+}
+init();
+</script>
+</body>
+</html>

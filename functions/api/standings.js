@@ -1,18 +1,17 @@
 // =========================================
-// F1 Hub — functions/api/standings.js  v1
+// F1 Hub — functions/api/standings.js  v1.1
 //
 // GET /api/standings?type=drivers|constructors&year=2026
 // year omitido = temporada actual ("current")
-//
-// Fuente: Jolpica-F1
 // =========================================
 
+import { fetchResilient, jsonResponse, jolpicaHeaders } from '../_lib/upstream.js';
+
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
-const CACHE_TTL = 600; // 10 min — durante un GP en vivo las posiciones de campeonato
-                        // oficiales solo cambian al terminar la carrera, así que esto es seguro
+const CACHE_TTL = 600;
 
 export async function onRequestGet(context) {
-  const { request } = context;
+  const { request, env } = context;
   const url = new URL(request.url);
   const type = (url.searchParams.get('type') || 'drivers').toLowerCase();
   const yearParam = url.searchParams.get('year');
@@ -23,7 +22,7 @@ export async function onRequestGet(context) {
   }
 
   const cache = caches.default;
-  const cacheKey = new Request(new URL(request.url).toString(), request);
+  const cacheKey = new Request(url.toString(), request);
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
@@ -31,63 +30,49 @@ export async function onRequestGet(context) {
     ? `${JOLPICA_BASE}/${year}/driverStandings.json`
     : `${JOLPICA_BASE}/${year}/constructorStandings.json`;
 
-  try {
-    const res = await fetch(endpoint, { headers: { 'User-Agent': 'f1hub/1.0 (personal fan project)' } });
-    if (!res.ok) return jsonResponse({ error: 'upstream_error', status: res.status }, 502);
-
-    const data = await res.json();
-    const list = data?.MRData?.StandingsTable?.StandingsLists?.[0];
-
-    if (!list) {
-      return jsonResponse({ season: year, type, standings: [], note: 'Sin datos disponibles para esta temporada todavía.' }, 200, cache, cacheKey, CACHE_TTL);
-    }
-
-    let standings;
-    if (type === 'drivers') {
-      standings = (list.DriverStandings || []).map((d) => ({
-        position: Number(d.position),
-        points: Number(d.points),
-        wins: Number(d.wins),
-        driverId: d.Driver?.driverId,
-        code: d.Driver?.code,
-        number: d.Driver?.permanentNumber,
-        name: `${d.Driver?.givenName} ${d.Driver?.familyName}`,
-        nationality: d.Driver?.nationality,
-        constructors: (d.Constructors || []).map((c) => c.name),
-      }));
-    } else {
-      standings = (list.ConstructorStandings || []).map((c) => ({
-        position: Number(c.position),
-        points: Number(c.points),
-        wins: Number(c.wins),
-        constructorId: c.Constructor?.constructorId,
-        name: c.Constructor?.name,
-        nationality: c.Constructor?.nationality,
-      }));
-    }
-
-    const payload = {
-      season: list.season,
-      round: Number(list.round),
-      type,
-      standings,
-    };
-
-    return jsonResponse(payload, 200, cache, cacheKey, CACHE_TTL);
-  } catch (err) {
-    return jsonResponse({ error: 'fetch_failed', message: String(err) }, 500);
-  }
-}
-
-function jsonResponse(obj, status = 200, cache, cacheKey, ttl) {
-  const res = new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-      ...(ttl ? { 'Cache-Control': `public, max-age=${ttl}` } : { 'Cache-Control': 'no-store' }),
-    },
+  const result = await fetchResilient(endpoint, {
+    fetchOptions: { headers: jolpicaHeaders() },
+    kv: env.F1_KV ?? null,
+    staleKey: `stale:standings:${type}:${year}`,
   });
-  if (cache && cacheKey && status === 200) cache.put(cacheKey, res.clone());
-  return res;
+
+  if (!result.ok) {
+    return jsonResponse({ unavailable: true, reason: 'upstream_and_backup_failed', season: year, type, standings: [] }, 200);
+  }
+
+  const list = result.data?.MRData?.StandingsTable?.StandingsLists?.[0];
+
+  if (!list) {
+    return jsonResponse(
+      { unavailable: false, season: year, type, standings: [], note: 'Sin datos disponibles para esta temporada todavía.' },
+      200, { cache, cacheKey, ttl: CACHE_TTL },
+    );
+  }
+
+  let standings;
+  if (type === 'drivers') {
+    standings = (list.DriverStandings || []).map((d) => ({
+      position: Number(d.position),
+      points: Number(d.points),
+      wins: Number(d.wins),
+      driverId: d.Driver?.driverId,
+      code: d.Driver?.code,
+      number: d.Driver?.permanentNumber,
+      name: `${d.Driver?.givenName} ${d.Driver?.familyName}`,
+      nationality: d.Driver?.nationality,
+      constructors: (d.Constructors || []).map((c) => c.name),
+    }));
+  } else {
+    standings = (list.ConstructorStandings || []).map((c) => ({
+      position: Number(c.position),
+      points: Number(c.points),
+      wins: Number(c.wins),
+      constructorId: c.Constructor?.constructorId,
+      name: c.Constructor?.name,
+      nationality: c.Constructor?.nationality,
+    }));
+  }
+
+  const payload = { unavailable: false, stale: result.stale, season: list.season, round: Number(list.round), type, standings };
+  return jsonResponse(payload, 200, { cache, cacheKey, ttl: result.stale ? 60 : CACHE_TTL });
 }

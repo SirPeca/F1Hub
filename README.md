@@ -1,132 +1,192 @@
 # F1 Hub
 
-Calendario, en vivo, posiciones, historia y noticias de Fórmula 1.
-Sin publicidad, sin registro, sin apps que rastrean. Hecho como PWA
-(instalable) con Cloudflare Pages + Functions.
+Calendario, en vivo, posiciones, historia, comparador, favoritos,
+votaciones por GP, cuentas de usuario y noticias de Fórmula 1. Sin
+publicidad, sin apps que rastrean. PWA instalable sobre Cloudflare
+Pages + Functions + D1 + KV.
 
 ## Stack
 
 - **Frontend**: HTML/CSS/JS vanilla (sin build step), PWA instalable.
-- **Backend**: Cloudflare Pages Functions (`/functions/api/*`), actúan
-  como proxy/caché de las APIs externas — el navegador nunca las llama
-  directo (evita CORS, rate limits, y permite cachear en el edge).
-- **Datos**:
+- **Backend**: Cloudflare Pages Functions (`/functions/api/*`).
+- **Persistencia**:
+  - **D1** (`F1_DB`): usuarios, sesiones, identidades anónimas, likes,
+    votaciones por GP, favoritos.
+  - **KV** (`F1_KV`): caché de respaldo ante caídas de Jolpica, y rate
+    limiting de endpoints sensibles (login/registro).
+- **Datos externos**:
   - [Jolpica-F1](https://github.com/jolpica/jolpica-f1) — calendario,
-    resultados, posiciones, historia. Sucesor directo de Ergast (que
-    cerró en 2024), mismo formato de respuesta.
-  - [OpenF1](https://openf1.org) — estado de sesión "en vivo". El
-    histórico es gratis; el modo en vivo real (posiciones minuto a
-    minuto durante la sesión) requiere una cuenta *supporter* de pago
-    de OpenF1. Ver sección "En vivo" abajo.
-  - RSS de Autosport, Motorsport.com y RaceFans — noticias, parseadas
-    server-side, siempre con link a la nota original.
+    resultados, posiciones, historia, comparador.
+  - [OpenF1](https://openf1.org) — estado de sesión en vivo (el modo
+    en vivo real requiere cuenta *supporter* de pago; ver `live.js`).
+  - RSS de Autosport, Motorsport.com y RaceFans — noticias.
+  - Wikipedia REST API — fotos e info con licencia libre (Wikimedia
+    Commons) de pilotos/equipos, NO fotos con copyright de agencias.
+
+## Setup completo (orden recomendado)
+
+### 1) Deploy base (ya lo tenías de v1)
+
+```bash
+cd f1hub
+git init && git add -A && git commit -m "F1 Hub v2"
+git remote add origin https://github.com/TU_USUARIO/f1-hub.git
+git push -u origin main
+```
+
+Conectar en Cloudflare Pages: **Build command**: vacío · **Build output
+directory**: `web`.
+
+### 2) D1 — base de datos (necesaria para likes, votos, favoritos, cuentas)
+
+```bash
+npx wrangler d1 create f1hub-db
+```
+
+Copiá el `database_id` que te devuelve a `wrangler.toml` (o bindealo
+desde el dashboard: Pages > tu proyecto > Settings > Functions > D1
+database bindings, binding name = `F1_DB`).
+
+Aplicá las 3 migraciones en orden:
+
+```bash
+npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
+```
+
+### 3) KV — caché de respaldo + rate limiting
+
+```bash
+npx wrangler kv namespace create F1_KV
+```
+
+Bindealo como `F1_KV` (wrangler.toml o dashboard). Sin esto, el sitio
+funciona igual pero pierde el amortiguador ante caídas de Jolpica y el
+rate-limit de login/registro.
+
+### 4) Secret de identidad (obligatorio para que las cookies anónimas sean seguras)
+
+```bash
+npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
+# cualquier string largo y random, ej: openssl rand -hex 32
+```
+
+### 5) Convertirte en administrador
+
+Una vez que te registrás desde el sitio (botón 👤 > Crear cuenta), corré:
+
+```bash
+npx wrangler d1 execute f1hub-db --remote --command="UPDATE users SET is_admin = 1 WHERE email = 'tu@mail.com'"
+```
+
+Después entrá a `/admin.html`.
+
+### 6) Opcional — Login con Google/GitHub
+
+**Google**: [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+→ Create Credentials → OAuth Client ID → tipo "Web application" →
+Authorized redirect URI: `https://TU_DOMINIO/api/auth/oauth/google-callback`.
+
+**GitHub**: Settings → Developer settings → OAuth Apps → New OAuth App
+→ Authorization callback URL: `https://TU_DOMINIO/api/auth/oauth/github-callback`.
+
+Cargá los 4 secrets:
+```bash
+npx wrangler pages secret put GOOGLE_CLIENT_ID --project-name=f1-hub
+npx wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=f1-hub
+npx wrangler pages secret put GITHUB_CLIENT_ID --project-name=f1-hub
+npx wrangler pages secret put GITHUB_CLIENT_SECRET --project-name=f1-hub
+```
+Sin esto, los botones de Google/GitHub responden 503 con un mensaje
+claro — el login con email/contraseña funciona igual sin esto.
+
+### 7) Opcional — Email transaccional (verificación / reset de contraseña)
+
+Hoy las cuentas quedan **auto-verificadas** (no hay envío de mail
+todavía). Para activarlo: creá cuenta en [Resend](https://resend.com),
+verificá tu dominio, y:
+```bash
+npx wrangler pages secret put RESEND_API_KEY --project-name=f1-hub
+```
+En cuanto ese secret exista, `register.js` deja de auto-verificar y
+falta cablear el envío del mail (marcado con `TODO` en el archivo) —
+avisame cuando tengas la cuenta de Resend y lo termino.
+
+### 8) Cloudflare Web Analytics (opcional, recomendado)
+
+Dashboard del proyecto de Pages → Analytics & Logs → Web Analytics →
+activar. Te da visitas, países, dispositivos y navegadores sin cookies
+y sin tocar código — es lo que usa el punto 6 del pedido original en
+vez de reinventar tracking propio.
+
+### 9) Notificaciones push + campeonatos precalculados
+
+Ambos dependen de un Worker aparte (Pages no soporta Cron Triggers).
+Ver `cron-worker/README.md` — son ~5 minutos de setup, las claves
+VAPID ya están generadas.
 
 ## Estructura
 
 ```
 f1hub/
-├── wrangler.toml
-├── web/                    ← se sirve como sitio estático
-│   ├── index.html
-│   ├── styles.css
-│   ├── app.js
-│   ├── sw.js                (service worker, shell offline)
-│   ├── manifest.json
-│   ├── _headers              (seguridad + cache headers)
-│   ├── icon-192.png
-│   └── icon-512.png
+├── migrations/                 (4 archivos SQL, aplicar en orden)
+├── cron-worker/                 Worker aparte: push + precálculo (ver su README)
+├── web/
+│   ├── index.html / admin.html
+│   ├── styles.css / app.js / sw.js
+│   ├── manifest.json / robots.txt / sitemap.xml
+│   └── icon-192.png / icon-512.png
 └── functions/
+    ├── _lib/                   (código compartido, no genera rutas)
+    │   ├── upstream.js          fetch con reintentos + fallback KV
+    │   ├── identity.js          cookie anónima firmada (HMAC)
+    │   ├── session.js           sesiones de usuario logueado
+    │   ├── password.js          hashing PBKDF2
+    │   └── ratelimit.js         rate limiting sobre KV
     └── api/
-        ├── calendar.js       GET /api/calendar
-        ├── standings.js      GET /api/standings?type=drivers|constructors&year=YYYY
-        ├── history.js        GET /api/history?mode=year|circuit|circuits&...
-        ├── live.js           GET /api/live
-        └── news.js           GET /api/news
+        ├── _middleware.js       resuelve la identidad en cada request
+        ├── calendar.js / standings.js / history.js / live.js / news.js
+        ├── likes.js / poll.js / favorites.js / search.js / compare.js / media.js
+        ├── push/subscribe.js / unsubscribe.js
+        ├── auth/
+        │   ├── register.js / login.js / logout.js / me.js
+        │   └── oauth/google.js, google-callback.js, github.js, github-callback.js
+        └── admin/
+            ├── stats.js
+            └── poll-result.js
 ```
 
-## Deploy — GitHub + Cloudflare Pages (CI/CD automático)
+## Qué falta para el roadmap original (y por qué)
 
-1. **Crear el repo en GitHub** (podés llamarlo `f1-hub`) y subir esta
-   carpeta tal cual está:
-   ```bash
-   cd f1hub
-   git init
-   git add .
-   git commit -m "F1 Hub — v1"
-   git branch -M main
-   git remote add origin https://github.com/TU_USUARIO/f1-hub.git
-   git push -u origin main
-   ```
+- **Notificaciones push**: código completo (`cron-worker/`, VAPID
+  generadas, botón 🔔 en el sitio) pero **sin probar contra un push
+  service real** — ver `cron-worker/README.md` para el motivo y cómo
+  validarlo vos.
+- **Campeonatos en el comparador**: ya se calculan, pero dependen de
+  que despliegues `cron-worker/` (corre 1 vez por día). Hasta el primer
+  deploy de ese Worker, el comparador muestra "se calculan con un
+  proceso diario aparte" en vez de un número.
+- **Resúmenes con IA / asistente de reglas**: no implementado en esta
+  entrega — implica costos por request y merece su propio diseño
+  (cache de respuestas, límites de uso) para no salir caro apenas
+  tenga tráfico. Se puede armar como `functions/api/ai/*` llamando a la
+  API de Claude con la key de Anthropic como secret.
+- **Verificación de email real**: el código está, falta conectar
+  Resend (ver punto 7 arriba).
+- **Login OAuth**: el código está completo y funcional, falta que
+  registres las apps en Google/GitHub y cargues los secrets.
 
-2. **Conectar el repo en Cloudflare Pages**:
-   - Dashboard de Cloudflare → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
-   - Elegí el repo `f1-hub`.
-   - Build settings:
-     - **Framework preset**: None
-     - **Build command**: (dejar vacío — no hay build step)
-     - **Build output directory**: `web`
-   - Deploy. Cloudflare va a detectar automáticamente `functions/` y
-     desplegar cada archivo como una Function.
-
-3. **Listo.** Desde ese momento, cada `git push` a `main` dispara un
-   deploy automático (y cada Pull Request te da un preview URL aparte,
-   útil para probar cambios antes de mergear).
-
-4. **Dominio propio** (opcional): en el proyecto de Pages → **Custom
-   domains** → agregá tu dominio o subdominio, igual que hiciste con
-   tus otros dos proyectos.
-
-## Variables de entorno (opcional)
-
-Si en algún momento pagás una cuenta *supporter* de OpenF1 para tener
-datos en vivo reales durante la sesión:
-
-```bash
-npx wrangler pages secret put OPENF1_TOKEN --project-name=f1-hub
-```
-
-`functions/api/live.js` lo detecta solo (usa `Authorization: Bearer`)
-sin que haya que tocar nada más del código.
-
-## "En vivo": qué esperar sin cuenta de pago
-
-OpenF1 separa sus datos en dos franjas:
-
-- **Históricos** (sesión terminada hace más de 30 min): libres, sin
-  límite de autenticación.
-- **En vivo** (desde 30 min antes de una sesión hasta 30 min después):
-  requieren cuenta *supporter* de OpenF1.
-
-Sin esa cuenta, la pestaña "En vivo" va a mostrar igual la sesión
-activa (nombre, circuito, horario) y avisa explícitamente que las
-posiciones en tiempo real no están disponibles — nunca inventa datos
-ni se rompe. En cuanto termina la sesión, esa misma información pasa a
-estar disponible como "histórico" gratis (aparece reflejada en
-Calendario/Posiciones/Historia con normalidad).
-
-## Caché
-
-Cada función usa la Cache API de Cloudflare (`caches.default`) con TTL
-ajustado a qué tan rápido cambia cada dato:
+## Caché (resumen)
 
 | Endpoint | TTL |
 |---|---|
-| `/api/calendar` | 15 min |
+| `/api/calendar`, `/api/poll` (calendario interno) | 15 min |
 | `/api/standings` | 10 min |
-| `/api/history` (temporadas pasadas) | 24 h |
-| `/api/history` (temporada actual) | 15 min |
-| `/api/live` (sesión activa) | 15 s |
-| `/api/live` (sin sesión activa) | 5 min |
+| `/api/history` (pasado / actual) | 24h / 15 min |
+| `/api/search` (listas completas) | 24h |
+| `/api/media` | 7 días |
+| `/api/live` (activo / inactivo) | 15 s / 5 min |
 | `/api/news` | 10 min |
-
-Esto además protege el rate limit de Jolpica (200–500 req/hora sin
-auth) y de OpenF1 (3 req/s, 30 req/min).
-
-## Roadmap sugerido
-
-- Goleadores → no existe un equivalente directo en F1 (no hay "goles"),
-  pero se puede armar un ranking de vueltas rápidas / poles / podios
-  por piloto y temporada reusando `/api/history`.
-- Push notifications para "faltan 10 min para que arranque" (Web Push
-  + Cloudflare Cron Triggers).
-- Sección "circuitos" con mapa del trazado (SVG) por Gran Premio.
+| `/api/likes`, `/api/favorites`, `/api/auth/*` | sin caché (siempre en vivo) |

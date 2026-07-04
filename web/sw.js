@@ -43,3 +43,27 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// =========================================
+// PUSH NOTIFICATIONS
+// El payload lo arma cron-worker/src/index.js: { title, body, url }
+// =========================================
+self.addEventListener('push', (event) => {
+  let payload = { title: '🏁 F1 Hub', body: 'Hay novedades.', url: '/' };
+  try { payload = { ...payload, ...event.data.json() }; } catch { /* payload no-JSON, usamos default */ }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url: payload.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(clients.openWindow(url));
+});

@@ -37,8 +37,21 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "F1 Hub",
+  "url": "https://f1hub.pages.dev/",
+  "description": "Calendario, en vivo, posiciones, historia y noticias de Fórmula 1.",
+  "inLanguage": "es"
+}
+</script>
 </head>
 <body>
+
+<a href="#views" class="skip-link">Saltar al contenido</a>
 
 <div id="lights-out" aria-hidden="true">
   <div class="lights-rig">
@@ -58,7 +71,15 @@
         <span class="brand-sub" id="season-label">Temporada —</span>
       </div>
     </div>
-    <div id="header-status" class="header-status" aria-live="polite"></div>
+    <div class="header-right">
+      <button id="search-btn" class="icon-btn" aria-label="Buscar">🔍</button>
+      <div id="header-status" class="header-status" aria-live="polite"></div>
+      <button id="like-btn" class="like-btn" aria-pressed="false" aria-label="Me gusta">
+        <span id="like-icon">🏁</span><span id="like-count">—</span>
+      </button>
+      <button id="notify-btn" class="icon-btn" aria-label="Notificaciones">🔔</button>
+      <button id="account-btn" class="icon-btn account-btn" aria-label="Cuenta">👤</button>
+    </div>
   </header>
 
   <nav id="tabs" role="tablist" aria-label="Secciones">
@@ -66,6 +87,8 @@
     <button class="tab" data-tab="vivo" role="tab" aria-selected="false">En vivo</button>
     <button class="tab" data-tab="posiciones" role="tab" aria-selected="false">Posiciones</button>
     <button class="tab" data-tab="historia" role="tab" aria-selected="false">Historia</button>
+    <button class="tab" data-tab="comparar" role="tab" aria-selected="false">Comparar</button>
+    <button class="tab" data-tab="favoritos" role="tab" aria-selected="false">Favoritos</button>
     <button class="tab" data-tab="noticias" role="tab" aria-selected="false">Noticias</button>
   </nav>
 
@@ -74,6 +97,7 @@
     <!-- ============ CALENDARIO ============ -->
     <section id="view-calendario" class="view active">
       <div id="next-race-card" class="hero-card skeleton">Cargando próxima carrera…</div>
+      <div id="poll-widget"></div>
       <h2 class="section-title">Calendario completo</h2>
       <div id="calendar-list" class="calendar-list skeleton-block">Cargando calendario…</div>
     </section>
@@ -117,6 +141,30 @@
       <div id="history-content" class="skeleton-block">Seleccioná un año o un Gran Premio.</div>
     </section>
 
+    <!-- ============ COMPARAR ============ -->
+    <section id="view-comparar" class="view">
+      <div class="compare-pickers">
+        <div class="compare-picker">
+          <label for="compare-a">Piloto A</label>
+          <input id="compare-a" type="text" placeholder="Ej: Hamilton" autocomplete="off">
+          <div id="compare-a-results" class="autocomplete-results" hidden></div>
+        </div>
+        <div class="compare-vs">VS</div>
+        <div class="compare-picker">
+          <label for="compare-b">Piloto B</label>
+          <input id="compare-b" type="text" placeholder="Ej: Verstappen" autocomplete="off">
+          <div id="compare-b-results" class="autocomplete-results" hidden></div>
+        </div>
+      </div>
+      <div id="compare-result"></div>
+    </section>
+
+    <!-- ============ FAVORITOS ============ -->
+    <section id="view-favoritos" class="view">
+      <div id="favorites-list" class="skeleton-block">Cargando favoritos…</div>
+      <p class="favorites-hint">Marcá pilotos, equipos y circuitos con la ⭐ en Posiciones e Historia para verlos acá.</p>
+    </section>
+
     <!-- ============ NOTICIAS ============ -->
     <section id="view-noticias" class="view">
       <div id="news-sources" class="news-sources"></div>
@@ -133,6 +181,28 @@
 
 </div>
 
-<script src="app.js"></script>
+<!-- ============ BÚSQUEDA GLOBAL ============ -->
+<div id="search-overlay" class="overlay" hidden>
+  <div class="overlay-card">
+    <div class="overlay-header">
+      <input id="search-input" type="text" placeholder="Buscar pilotos, equipos, circuitos…" autocomplete="off">
+      <button id="search-close" class="icon-btn" aria-label="Cerrar búsqueda">✕</button>
+    </div>
+    <div id="search-results" class="search-results"></div>
+  </div>
+</div>
+
+<!-- ============ CUENTA (login/registro/perfil) ============ -->
+<div id="account-overlay" class="overlay" hidden>
+  <div class="overlay-card overlay-card-narrow">
+    <div class="overlay-header">
+      <span id="account-title">Ingresar</span>
+      <button id="account-close" class="icon-btn" aria-label="Cerrar">✕</button>
+    </div>
+    <div id="account-content"></div>
+  </div>
+</div>
+
+<script src="app.js" defer></script>
 </body>
 </html>

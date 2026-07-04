@@ -1,66 +1,52 @@
 // =========================================
-// F1 Hub — functions/api/history.js  v1
+// F1 Hub — functions/api/history.js  v1.1
 //
 // GET /api/history?mode=year&year=2023
-//    -> ganadores de cada Gran Premio de esa temporada + campeones
-//
 // GET /api/history?mode=circuit&circuit=monza
-//    -> todos los ganadores históricos en ese circuito (todas las temporadas)
-//
 // GET /api/history?mode=circuits
-//    -> catálogo de circuitos activos (para el selector "por Gran Premio")
-//
-// Fuente: Jolpica-F1
 // =========================================
 
+import { fetchResilient, jsonResponse, jolpicaHeaders } from '../_lib/upstream.js';
+
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
-const CACHE_TTL = 86400; // 24h — datos históricos no cambian
+const CACHE_TTL_PAST = 86400;   // temporadas cerradas: 24h
+const CACHE_TTL_CURRENT = 900;  // temporada en curso: 15 min
 
 export async function onRequestGet(context) {
-  const { request } = context;
+  const { request, env } = context;
   const url = new URL(request.url);
   const mode = (url.searchParams.get('mode') || 'year').toLowerCase();
+  const kv = env.F1_KV ?? null;
 
   const cache = caches.default;
   const cacheKey = new Request(url.toString(), request);
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  try {
-    if (mode === 'year') {
-      return await handleYear(url, cache, cacheKey);
-    }
-    if (mode === 'circuit') {
-      return await handleCircuit(url, cache, cacheKey);
-    }
-    if (mode === 'circuits') {
-      return await handleCircuitList(cache, cacheKey);
-    }
-    return jsonResponse({ error: 'invalid_mode' }, 400);
-  } catch (err) {
-    return jsonResponse({ error: 'fetch_failed', message: String(err) }, 500);
-  }
+  if (mode === 'year') return handleYear(url, cache, cacheKey, kv);
+  if (mode === 'circuit') return handleCircuit(url, cache, cacheKey, kv);
+  if (mode === 'circuits') return handleCircuitList(cache, cacheKey, kv);
+  return jsonResponse({ error: 'invalid_mode' }, 400);
 }
 
-async function handleYear(url, cache, cacheKey) {
+async function handleYear(url, cache, cacheKey, kv) {
   const year = url.searchParams.get('year');
   if (!/^\d{4}$/.test(year || '')) return jsonResponse({ error: 'invalid_year' }, 400);
 
   const currentYear = new Date().getFullYear();
-  // Temporadas pasadas son inmutables -> cache larga; la actual, cache corta
-  const ttl = Number(year) < currentYear ? CACHE_TTL : 900;
+  const ttl = Number(year) < currentYear ? CACHE_TTL_PAST : CACHE_TTL_CURRENT;
 
   const [winnersRes, driverStandRes, constructorStandRes] = await Promise.all([
-    fetch(`${JOLPICA_BASE}/${year}/results/1.json?limit=40`, { headers: ua() }),
-    fetch(`${JOLPICA_BASE}/${year}/driverStandings.json`, { headers: ua() }),
-    fetch(`${JOLPICA_BASE}/${year}/constructorStandings.json`, { headers: ua() }),
+    fetchResilient(`${JOLPICA_BASE}/${year}/results/1.json?limit=40`, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:history:winners:${year}` }),
+    fetchResilient(`${JOLPICA_BASE}/${year}/driverStandings.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:history:driverstd:${year}` }),
+    fetchResilient(`${JOLPICA_BASE}/${year}/constructorStandings.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:history:constructorstd:${year}` }),
   ]);
 
-  if (!winnersRes.ok) return jsonResponse({ error: 'upstream_error' }, 502);
+  if (!winnersRes.ok) {
+    return jsonResponse({ unavailable: true, reason: 'upstream_and_backup_failed', year: Number(year) }, 200);
+  }
 
-  const winnersData = await winnersRes.json();
-  const races = winnersData?.MRData?.RaceTable?.Races ?? [];
-
+  const races = winnersRes.data?.MRData?.RaceTable?.Races ?? [];
   const rounds = races.map((r) => {
     const winner = r.Results?.[0];
     return {
@@ -76,42 +62,47 @@ async function handleYear(url, cache, cacheKey) {
     };
   });
 
-  let driverChampion = null;
-  if (driverStandRes.ok) {
-    const d = await driverStandRes.json();
-    const top = d?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings?.[0];
-    if (top) {
-      driverChampion = {
-        name: `${top.Driver?.givenName} ${top.Driver?.familyName}`,
-        points: Number(top.points),
-        wins: Number(top.wins),
-        constructor: top.Constructors?.[0]?.name,
-      };
-    }
-  }
+  const driverChampion = extractTopDriver(driverStandRes);
+  const constructorChampion = extractTopConstructor(constructorStandRes);
+  const anyStale = winnersRes.stale || driverStandRes.stale || constructorStandRes.stale;
 
-  let constructorChampion = null;
-  if (constructorStandRes.ok) {
-    const c = await constructorStandRes.json();
-    const top = c?.MRData?.StandingsTable?.StandingsLists?.[0]?.ConstructorStandings?.[0];
-    if (top) {
-      constructorChampion = { name: top.Constructor?.name, points: Number(top.points), wins: Number(top.wins) };
-    }
-  }
-
-  const payload = { year: Number(year), rounds, driverChampion, constructorChampion };
-  return jsonResponse(payload, 200, cache, cacheKey, ttl);
+  const payload = { unavailable: false, stale: anyStale, year: Number(year), rounds, driverChampion, constructorChampion };
+  return jsonResponse(payload, 200, { cache, cacheKey, ttl: anyStale ? 60 : ttl });
 }
 
-async function handleCircuit(url, cache, cacheKey) {
+function extractTopDriver(standRes) {
+  if (!standRes.ok) return null;
+  const top = standRes.data?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings?.[0];
+  if (!top) return null;
+  return {
+    name: `${top.Driver?.givenName} ${top.Driver?.familyName}`,
+    points: Number(top.points),
+    wins: Number(top.wins),
+    constructor: top.Constructors?.[0]?.name,
+  };
+}
+
+function extractTopConstructor(standRes) {
+  if (!standRes.ok) return null;
+  const top = standRes.data?.MRData?.StandingsTable?.StandingsLists?.[0]?.ConstructorStandings?.[0];
+  if (!top) return null;
+  return { name: top.Constructor?.name, points: Number(top.points), wins: Number(top.wins) };
+}
+
+async function handleCircuit(url, cache, cacheKey, kv) {
   const circuit = url.searchParams.get('circuit');
   if (!circuit) return jsonResponse({ error: 'invalid_circuit' }, 400);
 
-  const res = await fetch(`${JOLPICA_BASE}/circuits/${encodeURIComponent(circuit)}/results/1.json?limit=200`, { headers: ua() });
-  if (!res.ok) return jsonResponse({ error: 'upstream_error', status: res.status }, 502);
+  const result = await fetchResilient(`${JOLPICA_BASE}/circuits/${encodeURIComponent(circuit)}/results/1.json?limit=200`, {
+    fetchOptions: { headers: jolpicaHeaders() },
+    kv, staleKey: `stale:history:circuit:${circuit}`,
+  });
 
-  const data = await res.json();
-  const races = data?.MRData?.RaceTable?.Races ?? [];
+  if (!result.ok) {
+    return jsonResponse({ unavailable: true, reason: 'upstream_and_backup_failed', circuitId: circuit }, 200);
+  }
+
+  const races = result.data?.MRData?.RaceTable?.Races ?? [];
   const circuitName = races[0]?.Circuit?.circuitName ?? circuit;
 
   const winners = races.map((r) => {
@@ -129,23 +120,25 @@ async function handleCircuit(url, cache, cacheKey) {
     };
   }).sort((a, b) => b.season - a.season);
 
-  const payload = { circuitId: circuit, circuitName, winners };
-  return jsonResponse(payload, 200, cache, cacheKey, CACHE_TTL);
+  const payload = { unavailable: false, stale: result.stale, circuitId: circuit, circuitName, winners };
+  return jsonResponse(payload, 200, { cache, cacheKey, ttl: result.stale ? 60 : CACHE_TTL_PAST });
 }
 
-async function handleCircuitList(cache, cacheKey) {
-  // Circuitos del calendario actual + históricos icónicos frecuentes.
-  // Ergast/Jolpica no tiene un endpoint liviano de "todos los circuitos con nombre bonito",
-  // así que combinamos el calendario vigente (siempre correcto) con una lista curada
-  // de trazados históricos relevantes para la búsqueda "por Gran Premio".
-  const res = await fetch(`${JOLPICA_BASE}/current.json`, { headers: ua() });
-  const current = res.ok ? await res.json() : null;
-  const currentCircuits = (current?.MRData?.RaceTable?.Races ?? []).map((r) => ({
-    id: r.Circuit?.circuitId,
-    name: r.Circuit?.circuitName,
-    country: r.Circuit?.Location?.country,
-  }));
+async function handleCircuitList(cache, cacheKey, kv) {
+  const result = await fetchResilient(`${JOLPICA_BASE}/current.json`, {
+    fetchOptions: { headers: jolpicaHeaders() },
+    kv, staleKey: 'stale:history:circuitlist',
+  });
 
+  const currentCircuits = result.ok
+    ? (result.data?.MRData?.RaceTable?.Races ?? []).map((r) => ({
+        id: r.Circuit?.circuitId, name: r.Circuit?.circuitName, country: r.Circuit?.Location?.country,
+      }))
+    : [];
+
+  // Catálogo curado de trazados históricos relevantes (no dependen del
+  // upstream, así que la búsqueda "por Gran Premio" nunca queda vacía
+  // aunque Jolpica esté caído).
   const historic = [
     { id: 'nurburgring', name: 'Nürburgring', country: 'Germany' },
     { id: 'hockenheimring', name: 'Hockenheimring', country: 'Germany' },
@@ -166,22 +159,5 @@ async function handleCircuitList(cache, cacheKey) {
   [...currentCircuits, ...historic].forEach((c) => { if (c.id) byId.set(c.id, c); });
   const circuits = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 
-  return jsonResponse({ circuits }, 200, cache, cacheKey, CACHE_TTL);
-}
-
-function ua() {
-  return { 'User-Agent': 'f1hub/1.0 (personal fan project)' };
-}
-
-function jsonResponse(obj, status = 200, cache, cacheKey, ttl) {
-  const res = new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-      ...(ttl ? { 'Cache-Control': `public, max-age=${ttl}` } : { 'Cache-Control': 'no-store' }),
-    },
-  });
-  if (cache && cacheKey && status === 200) cache.put(cacheKey, res.clone());
-  return res;
+  return jsonResponse({ unavailable: false, circuits }, 200, { cache, cacheKey, ttl: CACHE_TTL_PAST });
 }
