@@ -57,23 +57,26 @@ async function driverStats(env, driverId) {
     total(`${JOLPICA_BASE}/drivers/${driverId}/results/3.json?limit=1`, kv, `stale:cmp:p3:${driverId}`),
     total(`${JOLPICA_BASE}/drivers/${driverId}/qualifying/1.json?limit=1`, kv, `stale:cmp:poles:${driverId}`),
     total(`${JOLPICA_BASE}/drivers/${driverId}/seasons.json?limit=1`, kv, `stale:cmp:seasons:${driverId}`),
-    fetchResilient(`${JOLPICA_BASE}/drivers/${driverId}.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:cmp:profile:${driverId}` }),
+    fetchDriverProfile(driverId, kv),
     getPrecomputedChampionships(kv, driverId),
   ]);
 
   const wins_ = wins ?? 0, p2_ = p2 ?? 0, p3_ = p3 ?? 0;
-  const info = profile.ok ? profile.data?.MRData?.DriverTable?.Drivers?.[0] : null;
 
-  // Si el perfil Y las victorias fallaron a la vez, es casi seguro un
-  // problema transitorio (rate limit / Jolpica caído) y no que el
-  // piloto tenga 0 de todo — se lo decimos al frontend en vez de
-  // devolver un montón de ceros que parecen datos reales.
-  const looksLikeTotalFailure = !profile.ok && wins === null && poles === null;
+  // Si de verdad no conseguimos el nombre bonito (ni al reintentar),
+  // mostramos el ID formateado ("max_verstappen" -> "Max Verstappen")
+  // en vez del ID crudo en minúscula — nunca se ve "es un bug" aunque
+  // técnicamente sea un dato de respaldo.
+  const displayName = profile
+    ? `${profile.givenName} ${profile.familyName}`
+    : driverId.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+  const looksLikeTotalFailure = !profile && wins === null && poles === null;
 
   return {
     driverId,
-    name: info ? `${info.givenName} ${info.familyName}` : driverId,
-    nationality: info?.nationality ?? null,
+    name: displayName,
+    nationality: profile?.nationality ?? null,
     wins: wins_,
     podiums: wins_ + p2_ + p3_,
     poles: poles ?? 0,
@@ -81,6 +84,23 @@ async function driverStats(env, driverId) {
     championships,
     error: looksLikeTotalFailure ? 'upstream_unavailable' : null,
   };
+}
+
+/** El nombre "bonito" del piloto es el dato más visible de toda la
+ * comparación, así que además de los reintentos normales de
+ * fetchResilient, si la primera pasada falla lo reintentamos una vez
+ * más después de una pausa corta antes de resignarnos al formateo de
+ * respaldo. */
+async function fetchDriverProfile(driverId, kv) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await fetchResilient(`${JOLPICA_BASE}/drivers/${driverId}.json`, {
+      fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:cmp:profile:${driverId}`,
+    });
+    const info = result.ok ? result.data?.MRData?.DriverTable?.Drivers?.[0] : null;
+    if (info) return info;
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+  }
+  return null;
 }
 
 /** Lee el mapa {driverId: cantidad} que arma cron-worker una vez por día.

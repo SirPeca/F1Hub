@@ -11,7 +11,14 @@
 // existentes.
 // =========================================
 
-const ITERATIONS = 210_000;
+// Cloudflare Workers/Pages impone un tope DURO de 100,000 iteraciones
+// para PBKDF2 (hardcodeado en su runtime, workerd, para evitar abuso de
+// CPU en un entorno multi-tenant) — pedir más no lo ajusta, tira una
+// excepción. OWASP recomienda 600,000 para PBKDF2-SHA256, así que este
+// es un techo de la plataforma, no una elección de seguridad ideal.
+// Documentado acá para que quede claro por qué el número es "raro":
+// https://github.com/cloudflare/workerd/issues/1346
+const ITERATIONS = 100_000;
 
 export async function hashPassword(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));

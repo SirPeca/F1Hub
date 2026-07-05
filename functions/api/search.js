@@ -41,7 +41,12 @@ export async function onRequestGet(context) {
 
 async function getCachedList(env, key, baseUrl, extractItems) {
   const cache = caches.default;
-  const cacheReq = new Request(`https://internal.f1hub/cache/list/${key}`);
+  // "v2" al final: cuando cambia la LÓGICA de armado de esta lista (como
+  // acá, al pasar de limit=1000 sin paginar a paginación real), hay que
+  // bumpear esta versión — si no, Cloudflare puede seguir sirviendo la
+  // respuesta vieja cacheada hasta por 24h después del deploy, porque un
+  // redeploy de código no invalida por sí solo el Cache API.
+  const cacheReq = new Request(`https://internal.f1hub/cache/list/${key}/v2`);
   const cached = await cache.match(cacheReq);
   if (cached) return cached.json();
 

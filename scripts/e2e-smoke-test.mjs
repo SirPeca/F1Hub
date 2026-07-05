@@ -143,6 +143,18 @@ if (config.accounts) {
       assert(r.ok, `status ${r.status}`);
       // poll puede ser null si no hay ningún GP próximo — no es un fallo
     });
+
+    await test('POST /api/poll vota si hay una encuesta abierta (no requiere cuenta)', async () => {
+      const r = await call('GET', '/api/poll');
+      if (!r.data.poll || !r.data.poll.isOpen) {
+        console.log('   ⚠️  (sin encuesta abierta ahora mismo, se omite el voto — no es un fallo)');
+        return;
+      }
+      const driverId = r.data.poll.options[0]?.driverId;
+      assert(driverId, 'la encuesta está abierta pero no trae opciones de piloto');
+      const vote = await call('POST', '/api/poll', { pollId: r.data.poll.id, driverId });
+      assert(vote.ok, `status ${vote.status}, body: ${vote.rawTextIfNotJson || JSON.stringify(vote.data)}`);
+    });
   }
 
   await test('POST /api/auth/logout cierra la sesión', async () => {

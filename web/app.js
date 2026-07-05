@@ -16,6 +16,7 @@ const state = {
   activeTab: 'calendario',
   countdownTimer: null,
   timezone: 'America/Argentina/Buenos_Aires',
+  pollExpanded: false,
 };
 
 // Escapa cualquier texto que venga de fuentes externas (RSS, nombres
@@ -153,6 +154,7 @@ function setupTabs() {
       case 'search-result-click': onSearchResultClick(d.type, d.id); break;
       case 'vote-poll': votePoll(Number(d.pollId), d.driverId); break;
       case 'rerun-compare': runCompare(); break;
+      case 'toggle-poll': togglePoll(); break;
     }
   });
 
@@ -1150,6 +1152,34 @@ function renderPoll(poll) {
     return;
   }
 
+  // Compacta por defecto (pediste que no ocupe toda la pantalla). Si ya
+  // votaste, mostramos un estado de "gracias" en vez de la lista de nuevo.
+  if (poll.yourVote && !state.pollExpanded) {
+    const yourVoteOption = poll.options.find((o) => o.driverId === poll.yourVote);
+    el.innerHTML = `<div class="poll-card poll-open poll-collapsed">
+      <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
+      <div class="poll-title">¡Gracias! Tu pronóstico ya quedó cargado 🏁</div>
+      <div class="poll-meta-row"><span>Votaste: <b>${esc(yourVoteOption?.name ?? '')}</b></span><span id="poll-countdown">cierra en —</span></div>
+      <button class="retry-btn-inline" data-action="toggle-poll">Ver / cambiar mi voto</button>
+    </div>`;
+    startPollCountdown(new Date(poll.closesAt));
+    return;
+  }
+
+  if (!state.pollExpanded && !poll.yourVote) {
+    el.innerHTML = `<div class="poll-card poll-open poll-collapsed">
+      <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
+      <div class="poll-title">${question}</div>
+      <div class="poll-meta-row">
+        <span>👥 ${poll.totalVotes} ${poll.totalVotes === 1 ? 'voto' : 'votos'}</span>
+        <span id="poll-countdown">cierra en —</span>
+      </div>
+      <button class="compare-run-btn" data-action="toggle-poll">Votar ahora</button>
+    </div>`;
+    startPollCountdown(new Date(poll.closesAt));
+    return;
+  }
+
   el.innerHTML = `<div class="poll-card poll-open">
     <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
     <div class="poll-title">${question}</div>
@@ -1166,9 +1196,15 @@ function renderPoll(poll) {
       </div>
     `).join('')}
     <div class="poll-footer-note">${poll.yourVote ? 'Ya votaste — podés cambiar tu elección mientras la encuesta siga abierta.' : 'Un voto por persona. Se cierra apenas larga la sesión.'}</div>
+    <button class="retry-btn-inline" data-action="toggle-poll" style="margin-top:8px">Achicar</button>
   </div>`;
 
   startPollCountdown(new Date(poll.closesAt));
+}
+
+function togglePoll() {
+  state.pollExpanded = !state.pollExpanded;
+  loadPoll();
 }
 
 function startPollCountdown(target) {
@@ -1198,6 +1234,7 @@ async function votePoll(pollId, driverId) {
     return;
   }
   toast('¡Voto registrado! 🏁');
+  state.pollExpanded = false;
   loadPoll();
 }
 

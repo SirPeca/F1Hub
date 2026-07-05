@@ -30,24 +30,39 @@ export async function onRequestGet(context) {
   if (cached) return cached;
 
   try {
-    const res = await fetch(`https://es.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'f1hub/1.0 (personal fan project)' },
-    });
-
-    if (!res.ok) return respond({ found: false }, cache, cacheKey);
-
-    const data = await res.json();
-    const payload = {
-      found: Boolean(data.thumbnail?.source),
-      title: data.title,
-      thumbnailUrl: data.thumbnail?.source ?? null,
-      pageUrl: data.content_urls?.desktop?.page ?? null,
-      attribution: data.thumbnail?.source ? 'Imagen vía Wikipedia/Wikimedia Commons' : null,
-    };
+    // Probamos español primero (audiencia del sitio) y si el resultado
+    // es una página de desambiguación (o no trae foto), probamos en
+    // inglés — Wikipedia en inglés tiene cobertura mucho más completa
+    // y precisa para pilotos de F1 poco conocidos, y esto evita mostrar
+    // el ícono genérico de desambiguación en vez de una foto real.
+    const payload = (await fetchWikiSummary('es', q)) ?? (await fetchWikiSummary('en', q)) ?? { found: false };
     return respond(payload, cache, cacheKey);
   } catch (err) {
     return json({ found: false }, 200);
   }
+}
+
+/** Devuelve el payload si encontró una foto válida de un artículo real,
+ * o null si no había nada usable (para que el caller pruebe otro idioma). */
+async function fetchWikiSummary(lang, query) {
+  const res = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`, {
+    headers: { 'User-Agent': 'f1hub/1.0 (personal fan project)' },
+  });
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  // "disambiguation" = página de desambiguación (ícono genérico, no una
+  // foto de la persona) — la tratamos como "no encontrado" para poder
+  // probar el otro idioma en vez de mostrar un ícono que no es él/ella.
+  if (data.type === 'disambiguation' || !data.thumbnail?.source) return null;
+
+  return {
+    found: true,
+    title: data.title,
+    thumbnailUrl: data.thumbnail.source,
+    pageUrl: data.content_urls?.desktop?.page ?? null,
+    attribution: 'Imagen vía Wikipedia/Wikimedia Commons',
+  };
 }
 
 function respond(payload, cache, cacheKey) {
