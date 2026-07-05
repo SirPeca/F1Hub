@@ -126,6 +126,33 @@ async function setupLikeButton() {
 }
 
 function setupTabs() {
+  // Listener delegado único: reemplaza TODOS los onclick="" inline que
+  // usábamos antes en HTML generado dinámicamente. Esos onclick nunca
+  // funcionaron en producción porque nuestro propio CSP (script-src
+  // 'self', sin 'unsafe-inline') los bloquea — es intencional del lado
+  // de seguridad, así que la solución correcta es esta delegación, no
+  // debilitar el CSP.
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const d = el.dataset;
+    switch (d.action) {
+      case 'reload': location.reload(); break;
+      case 'retry-calendar': loadCalendar(); break;
+      case 'retry-standings': loadStandings(); break;
+      case 'retry-history-year': loadHistoryYear(); break;
+      case 'retry-history-circuit': loadHistoryCircuit(); break;
+      case 'toggle-favorite': toggleFavorite(d.kind, d.refId, d.label, el); break;
+      case 'remove-favorite-row':
+        toggleFavorite(d.kind, d.refId, d.label, el);
+        el.closest('.favorite-row')?.remove();
+        break;
+      case 'select-compare-driver': selectCompareDriver(d.side, d.id, d.label); break;
+      case 'search-result-click': onSearchResultClick(d.type, d.id); break;
+      case 'vote-poll': votePoll(Number(d.pollId), d.driverId); break;
+    }
+  });
+
   const tabs = document.querySelectorAll('.tab');
   tabs.forEach((btn, i) => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -219,7 +246,7 @@ function renderUnavailable(heroEl, secondaryEl, label) {
     <div class="hero-eyebrow"><span class="dot"></span>SERVICIO NO DISPONIBLE</div>
     <div class="hero-title">No pudimos traer el ${label} en este momento</div>
     <div class="hero-meta">No pudimos traer la información en este momento. Esto no depende de tu conexión — reintentá en unos minutos.</div>
-    <button class="retry-btn" onclick="location.reload()">Reintentar</button>
+    <button class="retry-btn" data-action="reload">Reintentar</button>
   `;
   if (secondaryEl) { secondaryEl.classList.remove('skeleton-block'); secondaryEl.innerHTML = ''; }
 }
@@ -442,7 +469,7 @@ async function loadStandings() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadStandings()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" data-action="retry-standings">Reintentar</button></div>`;
       return;
     }
     if (!data.standings.length) {
@@ -522,7 +549,7 @@ async function loadHistoryYear() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadHistoryYear()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" data-action="retry-history-year">Reintentar</button></div>`;
       return;
     }
 
@@ -568,7 +595,7 @@ async function loadHistoryCircuit() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadHistoryCircuit()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" data-action="retry-history-circuit">Reintentar</button></div>`;
       return;
     }
     if (!data.winners.length) {
@@ -650,7 +677,8 @@ async function loadFavoriteKeys() {
 function favStarHtml(kind, refId, label) {
   if (!refId || !state.config.likesAndVotesAndFavorites) return '';
   const isFav = state.favoriteKeys.has(`${kind}:${refId}`);
-  return `<button class="favorite-star ${isFav ? 'is-fav' : ''}" aria-label="Favorito" onclick="toggleFavorite('${kind}','${refId}',${JSON.stringify(label)},this)">★</button>`;
+  return `<button class="favorite-star ${isFav ? 'is-fav' : ''}" aria-label="Favorito"
+    data-action="toggle-favorite" data-kind="${esc(kind)}" data-ref-id="${esc(refId)}" data-label="${esc(label)}">★</button>`;
 }
 
 async function toggleFavorite(kind, refId, label, btnEl) {
@@ -715,7 +743,7 @@ async function loadFavorites() {
       return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
         <div class="favorite-row">
           <span>${esc(f.label)}</span>
-          <button class="favorite-star is-fav" onclick="toggleFavorite('${f.kind}','${f.refId}',${JSON.stringify(f.label)},this); this.closest('.favorite-row').remove()">★</button>
+          <button class="favorite-star is-fav" data-action="remove-favorite-row" data-kind="${esc(f.kind)}" data-ref-id="${esc(f.refId)}" data-label="${esc(f.label)}">★</button>
         </div>
       `).join('');
     }).join('');
@@ -751,7 +779,7 @@ function wireCompareInput(side) {
         const drivers = data.drivers || [];
         resultsEl.hidden = drivers.length === 0;
         resultsEl.innerHTML = drivers.map((d) =>
-          `<div class="autocomplete-item" onclick="selectCompareDriver('${side}','${d.id}','${d.label.replace(/'/g, "\\'")}')">${d.label}</div>`
+          `<div class="autocomplete-item" data-action="select-compare-driver" data-side="${esc(side)}" data-id="${esc(d.id)}" data-label="${esc(d.label)}">${esc(d.label)}</div>`
         ).join('');
       } catch { resultsEl.hidden = true; }
     }, 250);
@@ -834,8 +862,8 @@ function renderSearchGroup(label, items) {
   if (!items || !items.length) return '';
   return `<div class="search-result-group">
     <div class="search-result-group-label">${label}</div>
-    ${items.map((it) => `<div class="search-result-item" onclick="onSearchResultClick('${it.type}','${it.id}')">
-      <span>${it.label}</span><span class="sr-sub">${it.sub || ''}</span>
+    ${items.map((it) => `<div class="search-result-item" data-action="search-result-click" data-type="${esc(it.type)}" data-id="${esc(it.id)}">
+      <span>${esc(it.label)}</span><span class="sr-sub">${esc(it.sub || '')}</span>
     </div>`).join('')}
   </div>`;
 }
@@ -1094,7 +1122,7 @@ function renderPoll(poll) {
     ${poll.options.map((o) => `
       <div class="poll-option ${poll.yourVote === o.driverId ? 'selected' : ''}">
         <div class="poll-option-fill" style="width:${o.percentage}%"></div>
-        <button onclick="votePoll(${poll.id},'${o.driverId}')">
+        <button data-action="vote-poll" data-poll-id="${poll.id}" data-driver-id="${esc(o.driverId)}">
           <div class="poll-option-row"><span>${poll.yourVote === o.driverId ? '✓ ' : ''}${o.name}</span><span>${o.percentage}% (${o.votes})</span></div>
         </button>
       </div>
