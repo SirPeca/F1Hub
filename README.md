@@ -39,39 +39,76 @@ directory**: `web`.
 
 ### 2) D1 — base de datos (necesaria para likes, votos, favoritos, cuentas)
 
-```bash
-npx wrangler d1 create f1hub-db
-```
+**Importante:** como este proyecto se despliega vía integración Git
+(push a GitHub → Cloudflare hace el build), los bindings de D1/KV se
+configuran **solo desde el dashboard**, nunca desde `wrangler.toml`
+(Cloudflare Pages ignora esos bloques del archivo en este modo de
+deploy — es un comportamiento documentado de Cloudflare, no un bug
+nuestro, pero mezclar los dos métodos genera confusión y bindings que
+"desaparecen"). Los comandos de `wrangler d1 create` y `wrangler d1
+execute` sí funcionan siempre por CLI porque solo crean/modifican la
+base de datos en sí, no la bindean a un proyecto.
 
-Copiá el `database_id` que te devuelve a `wrangler.toml` (o bindealo
-desde el dashboard: Pages > tu proyecto > Settings > Functions > D1
-database bindings, binding name = `F1_DB`).
+**Paso a paso (una sola vez):**
 
-Aplicá las 3 migraciones en orden:
+1. Crear la base de datos (necesitás Node.js instalado):
+   ```bash
+   npx wrangler d1 create f1hub-db
+   ```
+   Guardá el `database_id` que te devuelve, lo vas a necesitar en el paso 3.
 
-```bash
-npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
-npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
-npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
-npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
-```
+2. Aplicar las 4 migraciones en orden:
+   ```bash
+   npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
+   npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
+   npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
+   npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
+   ```
+
+3. **Bindear desde el dashboard** (esto es lo que realmente conecta la
+   base de datos a tu sitio):
+   - Cloudflare dashboard → **Workers & Pages**.
+   - Click en **`f1hub`** — el que dice **Pages** al lado (no el que
+     dice Worker, ese es `f1hub-cron` y es otra cosa).
+   - **Settings** → **Bindings** → **Add binding**.
+   - Tipo: **D1 database**.
+   - Variable name (tiene que ser EXACTO, mayúsculas incluidas): `F1_DB`
+   - D1 database: elegí `f1hub-db` de la lista.
+   - Fijate que el selector de entorno arriba diga **Production**
+     (algunos dashboards piden repetir el mismo paso para "Preview"
+     también — si tenés la opción, agregalo en los dos).
+   - **Save**.
+
+4. **Redeploy**: los bindings nuevos no aplican solos, necesitás un
+   deploy nuevo. Alcanza con: dashboard → pestaña **Deployments** →
+   en el último deploy, menú (···) → **Retry deployment**. (O hacer
+   cualquier `git push`, lo que sea más cómodo.)
 
 ### 3) KV — caché de respaldo + rate limiting
 
-```bash
-npx wrangler kv namespace create F1_KV
-```
+Mismo criterio que D1: crear por CLI, bindear por dashboard.
 
-Bindealo como `F1_KV` (wrangler.toml o dashboard). Sin esto, el sitio
-funciona igual pero pierde el amortiguador ante caídas de Jolpica y el
-rate-limit de login/registro.
+1. ```bash
+   npx wrangler kv namespace create F1_KV
+   ```
+2. Dashboard → `f1hub` (Pages) → **Settings** → **Bindings** → **Add binding**
+   → tipo **KV namespace** → variable name **`F1_KV`** → elegí el
+   namespace creado → confirmá que esté en **Production** → **Save**.
+3. Redeploy (mismo paso que arriba).
+
+Sin esto, el sitio funciona igual pero pierde el amortiguador ante
+caídas de Jolpica y el rate-limit de login/registro.
 
 ### 4) Secret de identidad (obligatorio para que las cookies anónimas sean seguras)
+
+A diferencia de D1/KV, los **secrets sí son consistentes** entre CLI y
+dashboard — cualquiera de los dos métodos funciona:
 
 ```bash
 npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
 # cualquier string largo y random, ej: openssl rand -hex 32
 ```
+(o desde el dashboard: Settings → Environment variables → Add → tildar "Encrypt").
 
 ### 5) Convertirte en administrador
 

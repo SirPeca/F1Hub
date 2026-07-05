@@ -1,19 +1,25 @@
 // =========================================
-// F1 Hub — functions/api/search.js  (Fase C)
+// F1 Hub — functions/api/search.js  (Fase C)  v2 — con paginación real
 //
 // GET /api/search?q=hamilton
 //
-// Mantiene tres listas completas cacheadas (pilotos, constructores,
-// circuitos — todas chicas: ~860/210/77 registros respectivamente) y
-// busca por substring en memoria. Se refrescan solo 1 vez por día
-// (cambian poco: unas pocas altas por temporada), así que esto nunca
-// dispara una llamada a Jolpica por cada tecleo del usuario.
+// BUG CORREGIDO: la v1 pedía limit=1000, pero el límite MÁXIMO real de
+// Jolpica es 100 (documentado oficialmente). Con 860 pilotos en total,
+// eso significaba traer solo los primeros ~100 (orden ascendente desde
+// 1950) y perder silenciosamente a la mayoría de los pilotos modernos
+// — incluido Hamilton. Ahora se pagina de verdad usando `offset` hasta
+// completar `MRData.total`.
+//
+// Sigue cacheando 24h (estas listas cambian poco), así que la
+// paginación extra (unas ~9 requests para pilotos, ~3 para
+// constructores) se paga una vez por día, no por cada búsqueda.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
 
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
 const LIST_CACHE_TTL = 86400; // 24h
+const PAGE_LIMIT = 100; // máximo real que acepta Jolpica
 
 export async function onRequestGet(context) {
   const { request, env } = context;
@@ -21,9 +27,9 @@ export async function onRequestGet(context) {
   if (q.length < 2) return json({ drivers: [], constructors: [], circuits: [] });
 
   const [drivers, constructors, circuits] = await Promise.all([
-    getCachedList(env, 'drivers', `${JOLPICA_BASE}/drivers.json?limit=1000`),
-    getCachedList(env, 'constructors', `${JOLPICA_BASE}/constructors.json?limit=300`),
-    getCachedList(env, 'circuits', `${JOLPICA_BASE}/circuits.json?limit=200`),
+    getCachedList(env, 'drivers', `${JOLPICA_BASE}/drivers.json`, (d) => d?.MRData?.DriverTable?.Drivers ?? []),
+    getCachedList(env, 'constructors', `${JOLPICA_BASE}/constructors.json`, (d) => d?.MRData?.ConstructorTable?.Constructors ?? []),
+    getCachedList(env, 'circuits', `${JOLPICA_BASE}/circuits.json`, (d) => d?.MRData?.CircuitTable?.Circuits ?? []),
   ]);
 
   return json({
@@ -33,28 +39,46 @@ export async function onRequestGet(context) {
   });
 }
 
-async function getCachedList(env, key, url) {
+async function getCachedList(env, key, baseUrl, extractItems) {
   const cache = caches.default;
   const cacheReq = new Request(`https://internal.f1hub/cache/list/${key}`);
   const cached = await cache.match(cacheReq);
   if (cached) return cached.json();
 
-  const result = await fetchResilient(url, {
-    fetchOptions: { headers: jolpicaHeaders() },
-    kv: env.F1_KV ?? null,
-    staleKey: `stale:search:${key}`,
-  });
-
-  let list = [];
-  if (result.ok) {
-    if (key === 'drivers') list = result.data?.MRData?.DriverTable?.Drivers ?? [];
-    if (key === 'constructors') list = result.data?.MRData?.ConstructorTable?.Constructors ?? [];
-    if (key === 'circuits') list = result.data?.MRData?.CircuitTable?.Circuits ?? [];
-  }
+  const list = await fetchAllPages(env, baseUrl, extractItems, `stale:search:${key}`);
 
   const res = new Response(JSON.stringify(list), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${LIST_CACHE_TTL}` } });
   if (list.length) cache.put(cacheReq, res.clone());
   return list;
+}
+
+/** Pagina de verdad: sigue pidiendo offset += 100 hasta juntar MRData.total. */
+async function fetchAllPages(env, baseUrl, extractItems, staleKeyPrefix) {
+  let offset = 0;
+  let total = Infinity;
+  const all = [];
+
+  while (offset < total) {
+    const url = `${baseUrl}?limit=${PAGE_LIMIT}&offset=${offset}`;
+    const result = await fetchResilient(url, {
+      fetchOptions: { headers: jolpicaHeaders() },
+      kv: env.F1_KV ?? null,
+      staleKey: `${staleKeyPrefix}:${offset}`,
+    });
+
+    if (!result.ok) break; // nos quedamos con lo que ya juntamos hasta acá
+
+    const declaredTotal = Number(result.data?.MRData?.total);
+    total = Number.isFinite(declaredTotal) ? declaredTotal : all.length;
+
+    const pageItems = extractItems(result.data);
+    if (!pageItems.length) break; // corte de seguridad ante respuestas raras
+
+    all.push(...pageItems);
+    offset += PAGE_LIMIT;
+  }
+
+  return all;
 }
 
 function filterDrivers(list, q) {

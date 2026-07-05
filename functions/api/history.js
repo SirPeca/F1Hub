@@ -93,16 +93,11 @@ async function handleCircuit(url, cache, cacheKey, kv) {
   const circuit = url.searchParams.get('circuit');
   if (!circuit) return jsonResponse({ error: 'invalid_circuit' }, 400);
 
-  const result = await fetchResilient(`${JOLPICA_BASE}/circuits/${encodeURIComponent(circuit)}/results/1.json?limit=200`, {
-    fetchOptions: { headers: jolpicaHeaders() },
-    kv, staleKey: `stale:history:circuit:${circuit}`,
-  });
-
-  if (!result.ok) {
+  const races = await fetchAllCircuitResults(circuit, kv);
+  if (races === null) {
     return jsonResponse({ unavailable: true, reason: 'upstream_and_backup_failed', circuitId: circuit }, 200);
   }
 
-  const races = result.data?.MRData?.RaceTable?.Races ?? [];
   const circuitName = races[0]?.Circuit?.circuitName ?? circuit;
 
   const winners = races.map((r) => {
@@ -120,8 +115,34 @@ async function handleCircuit(url, cache, cacheKey, kv) {
     };
   }).sort((a, b) => b.season - a.season);
 
-  const payload = { unavailable: false, stale: result.stale, circuitId: circuit, circuitName, winners };
-  return jsonResponse(payload, 200, { cache, cacheKey, ttl: result.stale ? 60 : CACHE_TTL_PAST });
+  const payload = { unavailable: false, stale: false, circuitId: circuit, circuitName, winners };
+  return jsonResponse(payload, 200, { cache, cacheKey, ttl: CACHE_TTL_PAST });
+}
+
+/** Jolpica limita `limit` a 100 como máximo real (aunque se pida más),
+ * así que paginamos con `offset` hasta juntar todas las carreras de este
+ * circuito en vez de pedir un limit=200 que se trunca en silencio. */
+async function fetchAllCircuitResults(circuit, kv) {
+  let offset = 0;
+  let total = Infinity;
+  const all = [];
+
+  while (offset < total) {
+    const result = await fetchResilient(
+      `${JOLPICA_BASE}/circuits/${encodeURIComponent(circuit)}/results/1.json?limit=100&offset=${offset}`,
+      { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey: `stale:history:circuit:${circuit}:${offset}` },
+    );
+    if (!result.ok) return all.length ? all : null;
+
+    const declaredTotal = Number(result.data?.MRData?.total);
+    total = Number.isFinite(declaredTotal) ? declaredTotal : all.length;
+
+    const pageRaces = result.data?.MRData?.RaceTable?.Races ?? [];
+    if (!pageRaces.length) break;
+    all.push(...pageRaces);
+    offset += 100;
+  }
+  return all;
 }
 
 async function handleCircuitList(cache, cacheKey, kv) {

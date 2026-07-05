@@ -2,42 +2,41 @@ name = "f1-hub"
 compatibility_date = "2026-02-02"
 pages_build_output_dir = "web"
 
-# ---- D1: base de datos relacional (Fase A/D — identidades, likes, votos, favoritos, usuarios) ----
-# 1) npx wrangler d1 create f1hub-db
-# 2) copiá el database_id que te devuelve y descomentá:
-# [[d1_databases]]
-# binding = "F1_DB"
-# database_name = "f1hub-db"
-# database_id = "TU_DATABASE_ID_AQUI"
+# =========================================================
+# IMPORTANTE — leer antes de tocar bindings (D1/KV)
 #
-# 3) aplicá el esquema:
-#    npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
+# Este proyecto se despliega vía integración Git (push a GitHub ->
+# Cloudflare hace el build solo). Para ESE modo de deploy, Cloudflare
+# Pages históricamente IGNORA los bindings declarados acá abajo en
+# wrangler.toml (D1, KV, etc.) — solo los toma si el proyecto "optó"
+# explícitamente por usar este archivo como fuente de verdad, algo que
+# no es el flujo estándar y puede generar conflictos raros con lo que
+# esté cargado en el dashboard (el dashboard "gana" en caso de choque,
+# de forma poco predecible).
 #
-# También se puede crear y bindear desde el dashboard de Cloudflare Pages:
-# Settings > Functions > D1 database bindings
+# Por eso, para D1 y KV, la única fuente de verdad para este proyecto
+# es el DASHBOARD de Cloudflare, no este archivo:
+#
+#   Cloudflare dashboard → Workers & Pages → f1hub (el proyecto de
+#   Pages, no el Worker f1hub-cron) → Settings → Bindings →
+#   Add binding → elegir "D1 database" / "KV namespace" →
+#   Variable name EXACTO: F1_DB (para D1) y F1_KV (para KV) →
+#   asegurarse de que el entorno "Production" esté tildado, no solo
+#   "Preview" → Save → hacer un redeploy para que tome efecto.
+#
+# NO descomentar bloques [[d1_databases]] / [[kv_namespaces]] acá para
+# este proyecto — no van a tener efecto en producción y solo generan
+# confusión sobre cuál es la config real.
+# =========================================================
 
 # ---- Secret para firmar la cookie de identidad anónima ----
-# npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
+# Los secrets (a diferencia de D1/KV) sí son consistentes entre
+# wrangler y el dashboard, así que este comando funciona bien:
+#   npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
 # (cualquier string largo y aleatorio sirve, por ejemplo: openssl rand -hex 32)
-
-# ---- KV opcional: respaldo de "última copia buena conocida" ----
-# Sin esto, el sitio funciona igual (reintentos en caliente contra Jolpica),
-# pero si Jolpica está caído del todo, la UI avisa "servicio no disponible"
-# en vez de mostrar un dato viejo. Con el KV creado, en ese escenario
-# muestra la última respuesta buena que se guardó, marcada como "stale".
-#
-# 1) npx wrangler kv namespace create F1_KV
-# 2) copiá el id que te devuelve y descomentá estas líneas:
-# [[kv_namespaces]]
-# binding = "F1_KV"
-# id = "TU_ID_AQUI"
-#
-# (también se puede crear y bindear desde el dashboard de Cloudflare Pages:
-# Settings > Functions > KV namespace bindings)
+# También se puede cargar desde el dashboard: Settings > Environment variables > Encrypt.
 
 # ---- Variables opcionales ----
 # Si en el futuro sumás una cuenta "supporter" de OpenF1 (para datos en vivo
-# reales durante la sesión), agregá el secret OPENF1_TOKEN desde el dashboard
-# de Cloudflare Pages (Settings > Environment variables > Encrypt) o con:
-#   npx wrangler pages secret put OPENF1_TOKEN
+# reales durante la sesión), agregá el secret OPENF1_TOKEN de la misma forma.
 # La función functions/api/live.js lo detecta automáticamente si existe.

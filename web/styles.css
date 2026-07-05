@@ -63,8 +63,9 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{ou
    ========================================= */
 #app{position:relative;z-index:2;max-width:760px;margin:0 auto;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
 
-#app-header{display:flex;align-items:center;justify-content:space-between;padding:calc(14px + var(--sai-t)) 18px 12px;position:sticky;top:0;z-index:10;
+#app-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:calc(14px + var(--sai-t)) 18px 12px;position:sticky;top:0;z-index:10;
   background:linear-gradient(180deg,var(--bg0) 70%,transparent);backdrop-filter:blur(6px)}
+.tz-select{font-family:var(--mono);font-size:10.5px;background:var(--bg1);border:1px solid var(--bord);border-radius:20px;padding:5px 8px;color:var(--sub);flex-shrink:0}
 .brand{display:flex;align-items:center;gap:10px}
 .brand-mark{font-family:var(--disp);font-weight:900;font-style:italic;font-size:20px;background:var(--red);color:#fff;padding:3px 8px;border-radius:5px;letter-spacing:-.5px;
   box-shadow:0 2px 14px var(--red-glow)}

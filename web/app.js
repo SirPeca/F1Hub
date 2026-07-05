@@ -15,6 +15,7 @@ const state = {
   currentYear: new Date().getFullYear(),
   activeTab: 'calendario',
   countdownTimer: null,
+  timezone: 'America/Argentina/Buenos_Aires',
 };
 
 // Escapa cualquier texto que venga de fuentes externas (RSS, nombres
@@ -53,6 +54,7 @@ async function safeRequest(url, options) {
 // ---------- init ----------
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
+  setupTimezone();
   setupTabs();
   setupStandingsControls();
   setupHistoryControls();
@@ -197,18 +199,41 @@ function teamColor(name) {
   return TEAM_COLORS[name] || '#8a8a92';
 }
 
+function currentTimeZone() {
+  return state.timezone === 'local' ? undefined : state.timezone;
+}
+
 function fmtDate(iso, opts = {}) {
   try {
     return new Date(iso).toLocaleDateString('es-AR', {
-      day: '2-digit', month: 'short', ...opts,
+      day: '2-digit', month: 'short', timeZone: currentTimeZone(), ...opts,
     });
   } catch { return ''; }
 }
 
 function fmtTime(iso) {
   try {
-    return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: currentTimeZone() });
   } catch { return ''; }
+}
+
+function setupTimezone() {
+  const sel = document.getElementById('tz-select');
+  let saved = 'America/Argentina/Buenos_Aires';
+  try { saved = localStorage.getItem('f1hub_tz') || saved; } catch { /* localStorage puede estar bloqueado */ }
+  state.timezone = saved;
+  sel.value = saved;
+
+  sel.addEventListener('change', () => {
+    state.timezone = sel.value;
+    try { localStorage.setItem('f1hub_tz', sel.value); } catch { /* no es crítico si falla */ }
+    // Re-renderizar lo que ya esté cargado con la nueva zona horaria
+    if (calendarData) { renderHero(); renderCalendarList(); }
+    if (document.getElementById('view-historia').classList.contains('active')) {
+      const mode = document.querySelector('[data-history].active')?.dataset.history;
+      mode === 'circuit' ? loadHistoryCircuit() : loadHistoryYear();
+    }
+  });
 }
 
 // =========================================
