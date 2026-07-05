@@ -29,6 +29,27 @@ function esc(str) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Llama a un endpoint y devuelve {ok, status, data}. Distingue
+// explícitamente "no hay red" de "el servidor respondió pero no con
+// JSON válido" (típicamente una excepción no controlada en el backend) —
+// antes ambos casos mostraban el mismo "No se pudo conectar", lo que
+// tapaba bugs reales de backend detrás de un mensaje de red.
+async function safeRequest(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch {
+    return { ok: false, networkError: true, status: 0, data: null };
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    return { ok: false, networkError: false, serverError: true, status: res.status, data: null };
+  }
+  return { ok: res.ok, networkError: false, serverError: false, status: res.status, data };
+}
+
 // ---------- init ----------
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
@@ -633,29 +654,28 @@ function favStarHtml(kind, refId, label) {
 }
 
 async function toggleFavorite(kind, refId, label, btnEl) {
+  const willBeFav = !btnEl.classList.contains('is-fav');
   btnEl.classList.toggle('is-fav'); // optimista
-  try {
-    const res = await fetch('/api/favorites', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, refId, label }),
-    });
-    const data = await res.json();
+  btnEl.disabled = true;
 
-    if (!res.ok) {
-      btnEl.classList.toggle('is-fav'); // revertir el optimismo
-      toast(data.error === 'not_configured'
-        ? 'Esta función estará disponible próximamente.'
-        : 'No se pudo guardar el favorito. Probá de nuevo.');
-      return;
-    }
+  const { ok, networkError, serverError, data } = await safeRequest('/api/favorites', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, refId, label }),
+  });
+  btnEl.disabled = false;
 
-    const key = `${kind}:${refId}`;
-    if (data.favorited) state.favoriteKeys.add(key); else state.favoriteKeys.delete(key);
-    btnEl.classList.toggle('is-fav', Boolean(data.favorited));
-  } catch {
-    btnEl.classList.toggle('is-fav'); // revertir si falló
-    toast('No se pudo conectar. Probá de nuevo.');
+  if (networkError) { btnEl.classList.toggle('is-fav'); toast('No hay conexión. Revisá tu internet.'); return; }
+  if (serverError) { btnEl.classList.toggle('is-fav'); toast('El servidor tuvo un problema. Probá de nuevo.'); return; }
+  if (!ok) {
+    btnEl.classList.toggle('is-fav');
+    toast(data?.error === 'not_configured' ? 'Esta función estará disponible próximamente.' : 'No se pudo guardar. Probá de nuevo.');
+    return;
   }
+
+  const key = `${kind}:${refId}`;
+  if (data.favorited) state.favoriteKeys.add(key); else state.favoriteKeys.delete(key);
+  btnEl.classList.toggle('is-fav', Boolean(data.favorited));
+  toast(data.favorited ? `${label} agregado a favoritos ⭐` : `${label} sacado de favoritos`);
 }
 
 // Aviso corto y no intrusivo para errores que antes fallaban en silencio.
@@ -991,23 +1011,20 @@ async function submitAuth(endpoint) {
   const errorEl = document.getElementById('auth-error');
   errorEl.textContent = '';
 
-  try {
-    const res = await fetch(endpoint, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, nickname }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      errorEl.textContent = friendlyAuthError(data.error);
-      return;
-    }
-    state.currentUser = data.user;
-    document.getElementById('account-btn').classList.add('is-logged');
-    renderAccountOverlay();
-    loadFavoriteKeys();
-  } catch {
-    errorEl.textContent = 'No se pudo conectar. Probá de nuevo.';
-  }
+  const { ok, networkError, serverError, data } = await safeRequest(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, nickname }),
+  });
+
+  if (networkError) { errorEl.textContent = 'No hay conexión. Revisá tu internet y probá de nuevo.'; return; }
+  if (serverError) { errorEl.textContent = 'El servidor tuvo un problema inesperado. Probá de nuevo en un momento.'; return; }
+  if (!ok) { errorEl.textContent = friendlyAuthError(data.error); return; }
+
+  state.currentUser = data.user;
+  document.getElementById('account-btn').classList.add('is-logged');
+  renderAccountOverlay();
+  loadFavoriteKeys();
+  toast(endpoint.includes('register') ? '¡Cuenta creada! Ya iniciaste sesión.' : `¡Hola, ${data.user.nickname || data.user.email}!`);
 }
 
 function friendlyAuthError(code) {
@@ -1103,20 +1120,19 @@ function startPollCountdown(target) {
 }
 
 async function votePoll(pollId, driverId) {
-  try {
-    const res = await fetch('/api/poll', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pollId, driverId }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      toast(data.error === 'poll_closed' ? 'La votación ya cerró para este Gran Premio.' : 'No se pudo registrar tu voto. Probá de nuevo.');
-      return;
-    }
-    loadPoll();
-  } catch {
-    toast('No se pudo conectar. Probá de nuevo.');
+  const { ok, networkError, serverError, data } = await safeRequest('/api/poll', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pollId, driverId }),
+  });
+
+  if (networkError) { toast('No hay conexión. Revisá tu internet.'); return; }
+  if (serverError) { toast('El servidor tuvo un problema. Probá de nuevo.'); return; }
+  if (!ok) {
+    toast(data?.error === 'poll_closed' ? 'La votación ya cerró para este Gran Premio.' : 'No se pudo registrar tu voto. Probá de nuevo.');
+    return;
   }
+  toast('¡Voto registrado! 🏁');
+  loadPoll();
 }
 
 // =========================================
@@ -1133,6 +1149,14 @@ function setupPush() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) { btn.hidden = true; return; }
 
   updatePushButtonState();
+
+  try {
+    if (!localStorage.getItem('f1hub_seen_notify_hint')) {
+      setTimeout(() => toast('🔔 Tocá la campana para recibir un aviso antes de que arranque cada sesión.'), 1500);
+      localStorage.setItem('f1hub_seen_notify_hint', '1');
+    }
+  } catch { /* localStorage puede estar bloqueado (modo privado); no es crítico */ }
+
   btn.addEventListener('click', async () => {
     if (Notification.permission === 'granted') {
       await unsubscribePush();

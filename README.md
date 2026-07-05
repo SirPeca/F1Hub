@@ -127,6 +127,21 @@ Ambos dependen de un Worker aparte (Pages no soporta Cron Triggers).
 Ver `cron-worker/README.md` — son ~5 minutos de setup, las claves
 VAPID ya están generadas.
 
+## Pruebas end-to-end contra el sitio real (antes de cada release)
+
+```bash
+node scripts/e2e-smoke-test.mjs https://tu-sitio.pages.dev
+```
+
+Corre contra tu despliegue real (Pages + D1 + KV reales, no un mock):
+config, calendario, posiciones, buscador, comparador, y si las cuentas
+están activadas, registro → sesión → favoritos (agregar/sacar) →
+encuesta → logout, con un usuario de prueba descartable. Requiere
+Node 18+, no instala nada. Si algo falla, el mensaje de error apunta a
+qué archivo/migración revisar — por ejemplo, un fallo en el registro
+con una respuesta no-JSON casi siempre significa una migración de D1
+faltante.
+
 ## Estructura
 
 ```
