@@ -1,42 +1,40 @@
-name = "f1-hub"
+name = "f1hub"
 compatibility_date = "2026-02-02"
 pages_build_output_dir = "web"
 
 # =========================================================
-# IMPORTANTE — leer antes de tocar bindings (D1/KV)
+# CAMBIO DE ESTRATEGIA DE DEPLOY — leer antes de tocar nada
 #
-# Este proyecto se despliega vía integración Git (push a GitHub ->
-# Cloudflare hace el build solo). Para ESE modo de deploy, Cloudflare
-# Pages históricamente IGNORA los bindings declarados acá abajo en
-# wrangler.toml (D1, KV, etc.) — solo los toma si el proyecto "optó"
-# explícitamente por usar este archivo como fuente de verdad, algo que
-# no es el flujo estándar y puede generar conflictos raros con lo que
-# esté cargado en el dashboard (el dashboard "gana" en caso de choque,
-# de forma poco predecible).
+# El botón "Add binding" del dashboard de Cloudflare está roto a nivel
+# de CUENTA (lo confirmamos: falla incluso en un proyecto de Pages
+# recién creado, en múltiples navegadores y en modo incógnito). Hasta
+# que Cloudflare lo resuelva por soporte, la salida es dejar de
+# depender de esa pantalla por completo:
 #
-# Por eso, para D1 y KV, la única fuente de verdad para este proyecto
-# es el DASHBOARD de Cloudflare, no este archivo:
+#   wrangler pages deploy SÍ lee los bindings de acá abajo — es un
+#   camino distinto al de "push a GitHub y que Cloudflare build solo",
+#   que es el que ignora este archivo.
 #
-#   Cloudflare dashboard → Workers & Pages → f1hub (el proyecto de
-#   Pages, no el Worker f1hub-cron) → Settings → Bindings →
-#   Add binding → elegir "D1 database" / "KV namespace" →
-#   Variable name EXACTO: F1_DB (para D1) y F1_KV (para KV) →
-#   asegurarse de que el entorno "Production" esté tildado, no solo
-#   "Preview" → Save → hacer un redeploy para que tome efecto.
-#
-# NO descomentar bloques [[d1_databases]] / [[kv_namespaces]] acá para
-# este proyecto — no van a tener efecto en producción y solo generan
-# confusión sobre cuál es la config real.
+# Esto significa que a partir de ahora el deploy es:
+#   npx wrangler pages deploy web --project-name=f1hub
+# en vez de (o además de) el push a GitHub. Ver README, sección
+# "Deploy por CLI" para el paso a paso completo, incluyendo cómo evitar
+# que las dos formas de deploy se pisen entre sí.
 # =========================================================
 
+[[d1_databases]]
+binding = "F1_DB"
+database_name = "f1hub-db"
+database_id = "a72321ce-810f-4662-b3bd-8582206ea473"
+
+[[kv_namespaces]]
+binding = "F1_KV"
+id = "43fbd7d481054fa0a623eebbf93e47db"
+
 # ---- Secret para firmar la cookie de identidad anónima ----
-# Los secrets (a diferencia de D1/KV) sí son consistentes entre
-# wrangler y el dashboard, así que este comando funciona bien:
-#   npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
+# npx wrangler pages secret put IDENTITY_SECRET --project-name=f1hub
 # (cualquier string largo y aleatorio sirve, por ejemplo: openssl rand -hex 32)
-# También se puede cargar desde el dashboard: Settings > Environment variables > Encrypt.
 
 # ---- Variables opcionales ----
-# Si en el futuro sumás una cuenta "supporter" de OpenF1 (para datos en vivo
-# reales durante la sesión), agregá el secret OPENF1_TOKEN de la misma forma.
-# La función functions/api/live.js lo detecta automáticamente si existe.
+# OPENF1_TOKEN, GOOGLE_CLIENT_ID/SECRET, GITHUB_CLIENT_ID/SECRET,
+# RESEND_API_KEY — todos opcionales, mismo mecanismo de secret.

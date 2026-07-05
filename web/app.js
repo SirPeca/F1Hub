@@ -152,6 +152,7 @@ function setupTabs() {
       case 'select-compare-driver': selectCompareDriver(d.side, d.id, d.label); break;
       case 'search-result-click': onSearchResultClick(d.type, d.id); break;
       case 'vote-poll': votePoll(Number(d.pollId), d.driverId); break;
+      case 'rerun-compare': runCompare(); break;
     }
   });
 
@@ -707,7 +708,6 @@ function favStarHtml(kind, refId, label) {
 }
 
 async function toggleFavorite(kind, refId, label, btnEl) {
-  const willBeFav = !btnEl.classList.contains('is-fav');
   btnEl.classList.toggle('is-fav'); // optimista
   btnEl.disabled = true;
 
@@ -815,10 +815,17 @@ function selectCompareDriver(side, id, label) {
   compareSelection[side] = id;
   document.getElementById(`compare-${side}`).value = label;
   document.getElementById(`compare-${side}-results`).hidden = true;
-  if (compareSelection.a && compareSelection.b) runCompare();
+  const runBtn = document.getElementById('run-compare-btn');
+  const bothSelected = Boolean(compareSelection.a && compareSelection.b);
+  runBtn.disabled = !bothSelected;
+  if (bothSelected) runCompare(); // auto-comparar como atajo; el botón queda para volver a correrla a mano
 }
 
 async function runCompare() {
+  if (!compareSelection.a || !compareSelection.b) {
+    toast('Elegí un piloto en cada campo antes de comparar.');
+    return;
+  }
   const el = document.getElementById('compare-result');
   el.innerHTML = '<div class="skeleton-block">Comparando…</div>';
   try {
@@ -827,13 +834,19 @@ async function runCompare() {
       fetchJSON(`/api/media?q=${encodeURIComponent(document.getElementById('compare-a').value)}`).catch(() => ({ found: false })),
       fetchJSON(`/api/media?q=${encodeURIComponent(document.getElementById('compare-b').value)}`).catch(() => ({ found: false })),
     ]);
+
+    if (data.a?.error || data.b?.error) {
+      el.innerHTML = `<div class="live-empty">No pudimos traer las estadísticas en este momento (el proveedor de datos está lento). <button class="retry-btn-inline" data-action="rerun-compare">Reintentar</button></div>`;
+      return;
+    }
+
     const rows = [
       ['championships', 'Campeonatos'], ['wins', 'Victorias'], ['podiums', 'Podios'], ['poles', 'Poles'], ['seasons', 'Temporadas'],
     ];
     el.innerHTML = `
       <div class="compare-header">
-        <span class="ch-name">${mediaA.found ? `<img class="ch-photo" loading="lazy" src="${mediaA.thumbnailUrl}" alt="${data.a.name}">` : ''}${data.a.name}</span>
-        <span class="ch-name">${data.b.name}${mediaB.found ? `<img class="ch-photo" loading="lazy" src="${mediaB.thumbnailUrl}" alt="${data.b.name}">` : ''}</span>
+        <span class="ch-name">${mediaA.found ? `<img class="ch-photo" loading="lazy" src="${mediaA.thumbnailUrl}" alt="${esc(data.a.name)}">` : ''}${esc(data.a.name)}</span>
+        <span class="ch-name">${esc(data.b.name)}${mediaB.found ? `<img class="ch-photo" loading="lazy" src="${mediaB.thumbnailUrl}" alt="${esc(data.b.name)}">` : ''}</span>
       </div>
       ${rows.map(([key, label]) => {
         const av = data.a[key] ?? '—', bv = data.b[key] ?? '—';
@@ -848,7 +861,7 @@ async function runCompare() {
       <p class="favorites-hint">${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
     `;
   } catch {
-    el.innerHTML = `<div class="live-empty">No se pudo comparar en este momento.</div>`;
+    el.innerHTML = `<div class="live-empty">No se pudo comparar en este momento. <button class="retry-btn-inline" data-action="rerun-compare">Reintentar</button></div>`;
   }
 }
 

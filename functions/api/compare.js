@@ -1,5 +1,5 @@
 // =========================================
-// F1 Hub — functions/api/compare.js  (Fase C)
+// F1 Hub — functions/api/compare.js  (Fase C)  v2
 //
 // GET /api/compare?a=hamilton&b=verstappen
 //
@@ -9,6 +9,16 @@
 // leemos ese total — así conseguimos "cantidad de victorias" o
 // "cantidad de poles" de un piloto con una sola llamada liviana en vez
 // de traer y contar cientos de resultados.
+//
+// v2 — reduce la ráfaga de pedidos: la v1 disparaba 12 requests
+// simultáneos a Jolpica (6 por piloto × 2 pilotos), lo cual es
+// suficiente para chocar contra su rate limit compartido (200-500/hora
+// entre TODOS los usuarios de Cloudflare) justo en el peor momento —
+// eso es lo que probablemente causaba comparaciones que volvían
+// completamente vacías. Ahora los dos pilotos se piden en secuencia
+// (máximo 6 simultáneos, no 12), y si de verdad fallan casi todos los
+// datos de un piloto, se devuelve `error` explícito en vez de ceros
+// silenciosos que parecen un bug.
 //
 // Importante: "campeonatos ganados" NO se calcula en esta request —
 // recorrer standings de cada temporada de la carrera del piloto sería
@@ -31,7 +41,11 @@ export async function onRequestGet(context) {
   const b = url.searchParams.get('b');
   if (!a || !b) return json({ error: 'missing_drivers' }, 400);
 
-  const [statsA, statsB] = await Promise.all([driverStats(env, a), driverStats(env, b)]);
+  // Secuencial, no Promise.all de los dos pilotos juntos: reduce el
+  // pico de requests simultáneos a Jolpica a la mitad (6 en vez de 12).
+  const statsA = await driverStats(env, a);
+  const statsB = await driverStats(env, b);
+
   return json({ a: statsA, b: statsB });
 }
 
@@ -50,6 +64,12 @@ async function driverStats(env, driverId) {
   const wins_ = wins ?? 0, p2_ = p2 ?? 0, p3_ = p3 ?? 0;
   const info = profile.ok ? profile.data?.MRData?.DriverTable?.Drivers?.[0] : null;
 
+  // Si el perfil Y las victorias fallaron a la vez, es casi seguro un
+  // problema transitorio (rate limit / Jolpica caído) y no que el
+  // piloto tenga 0 de todo — se lo decimos al frontend en vez de
+  // devolver un montón de ceros que parecen datos reales.
+  const looksLikeTotalFailure = !profile.ok && wins === null && poles === null;
+
   return {
     driverId,
     name: info ? `${info.givenName} ${info.familyName}` : driverId,
@@ -59,6 +79,7 @@ async function driverStats(env, driverId) {
     poles: poles ?? 0,
     seasons: seasons ?? null,
     championships,
+    error: looksLikeTotalFailure ? 'upstream_unavailable' : null,
   };
 }
 

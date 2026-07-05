@@ -40,14 +40,20 @@ export async function onRequest(context) {
   data.identityId = identityId;
   data.isNewIdentity = isNew;
 
+  // IMPORTANTE: esto tiene que pasar ANTES de next(), no después. Si un
+  // visitante nuevo entra directo a registrarse/loguearse, esa función
+  // hace `UPDATE identities SET user_id=... WHERE id=...` — si la fila
+  // todavía no existe (porque la insertamos recién al final, vía
+  // waitUntil), el UPDATE no afecta ninguna fila y el favorito/voto
+  // anónimo previo nunca queda vinculado a la cuenta nueva. Esperamos
+  // este insert (es una sola fila, rapidísimo) antes de seguir.
+  if (isNew && env.F1_DB) {
+    await env.F1_DB.prepare('INSERT OR IGNORE INTO identities (id) VALUES (?)').bind(identityId).run().catch(() => {});
+  }
+
   const response = await next();
 
   if (isNew) {
-    if (env.F1_DB) {
-      context.waitUntil(
-        env.F1_DB.prepare('INSERT OR IGNORE INTO identities (id) VALUES (?)').bind(identityId).run().catch(() => {})
-      );
-    }
     const signature = await signValue(identityId, secret);
     const headers = new Headers(response.headers);
     headers.append('Set-Cookie', serializeCookie(COOKIE_NAME, `${identityId}.${signature}`, { maxAgeSeconds: MAX_AGE_SECONDS }));

@@ -106,6 +106,8 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{ou
 .compare-picker label{font-size:11px;color:var(--sub);display:block;margin-bottom:4px}
 .compare-picker input{width:100%;padding:9px 10px;background:var(--bg1);border:1px solid var(--bord);border-radius:8px;color:var(--text);font-size:13px}
 .compare-vs{font-family:var(--mono);font-weight:700;color:var(--red);padding-bottom:9px}
+.compare-run-btn{width:100%;padding:11px;margin-bottom:16px;background:var(--red);color:#fff;border-radius:8px;font-weight:700;font-size:13.5px}
+.compare-run-btn:disabled{background:var(--bg2);color:var(--dim);cursor:not-allowed}
 .autocomplete-results{position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--bord);border-radius:8px;margin-top:4px;z-index:5;max-height:180px;overflow-y:auto}
 .autocomplete-item{padding:8px 10px;font-size:12.5px}
 .autocomplete-item:active{background:var(--bg3)}

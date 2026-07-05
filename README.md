@@ -23,96 +23,109 @@ Pages + Functions + D1 + KV.
   - Wikipedia REST API — fotos e info con licencia libre (Wikimedia
     Commons) de pilotos/equipos, NO fotos con copyright de agencias.
 
-## Setup completo (orden recomendado)
+## ⚠️ Sobre el deploy: por qué CLI y no el botón del dashboard
 
-### 1) Deploy base (ya lo tenías de v1)
+Si venís de una versión anterior de este proyecto: el botón **"Add
+binding"** del dashboard de Cloudflare (Settings → Bindings) puede
+aparecer inutilizable — confirmado en cuentas donde falla incluso en
+un proyecto de Pages recién creado, en varios navegadores, en modo
+incógnito. Es un problema del lado de Cloudflare, no de este proyecto,
+pero mientras no lo resuelvan por soporte, la forma confiable de
+bindear D1/KV es **desplegar por línea de comandos con Wrangler**, que
+sí lee los bindings de `wrangler.toml` — evita el botón roto por
+completo. Si en tu cuenta el botón del dashboard SÍ funciona, podés
+saltear esta sección y bindear ahí normalmente; el resultado final es
+el mismo.
+
+## Setup completo — deploy por CLI (recomendado)
+
+### 1) Preparación (una sola vez)
 
 ```bash
 cd f1hub
-git init && git add -A && git commit -m "F1 Hub v2"
-git remote add origin https://github.com/TU_USUARIO/f1-hub.git
-git push -u origin main
+npx wrangler login
 ```
 
-Conectar en Cloudflare Pages: **Build command**: vacío · **Build output
-directory**: `web`.
+Esto abre el navegador para autorizar Wrangler contra tu cuenta.
 
-### 2) D1 — base de datos (necesaria para likes, votos, favoritos, cuentas)
-
-**Importante:** como este proyecto se despliega vía integración Git
-(push a GitHub → Cloudflare hace el build), los bindings de D1/KV se
-configuran **solo desde el dashboard**, nunca desde `wrangler.toml`
-(Cloudflare Pages ignora esos bloques del archivo en este modo de
-deploy — es un comportamiento documentado de Cloudflare, no un bug
-nuestro, pero mezclar los dos métodos genera confusión y bindings que
-"desaparecen"). Los comandos de `wrangler d1 create` y `wrangler d1
-execute` sí funcionan siempre por CLI porque solo crean/modifican la
-base de datos en sí, no la bindean a un proyecto.
-
-**Paso a paso (una sola vez):**
-
-1. Crear la base de datos (necesitás Node.js instalado):
-   ```bash
-   npx wrangler d1 create f1hub-db
-   ```
-   Guardá el `database_id` que te devuelve, lo vas a necesitar en el paso 3.
-
-2. Aplicar las 4 migraciones en orden:
-   ```bash
-   npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
-   npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
-   npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
-   npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
-   ```
-
-3. **Bindear desde el dashboard** (esto es lo que realmente conecta la
-   base de datos a tu sitio):
-   - Cloudflare dashboard → **Workers & Pages**.
-   - Click en **`f1hub`** — el que dice **Pages** al lado (no el que
-     dice Worker, ese es `f1hub-cron` y es otra cosa).
-   - **Settings** → **Bindings** → **Add binding**.
-   - Tipo: **D1 database**.
-   - Variable name (tiene que ser EXACTO, mayúsculas incluidas): `F1_DB`
-   - D1 database: elegí `f1hub-db` de la lista.
-   - Fijate que el selector de entorno arriba diga **Production**
-     (algunos dashboards piden repetir el mismo paso para "Preview"
-     también — si tenés la opción, agregalo en los dos).
-   - **Save**.
-
-4. **Redeploy**: los bindings nuevos no aplican solos, necesitás un
-   deploy nuevo. Alcanza con: dashboard → pestaña **Deployments** →
-   en el último deploy, menú (···) → **Retry deployment**. (O hacer
-   cualquier `git push`, lo que sea más cómodo.)
-
-### 3) KV — caché de respaldo + rate limiting
-
-Mismo criterio que D1: crear por CLI, bindear por dashboard.
-
-1. ```bash
-   npx wrangler kv namespace create F1_KV
-   ```
-2. Dashboard → `f1hub` (Pages) → **Settings** → **Bindings** → **Add binding**
-   → tipo **KV namespace** → variable name **`F1_KV`** → elegí el
-   namespace creado → confirmá que esté en **Production** → **Save**.
-3. Redeploy (mismo paso que arriba).
-
-Sin esto, el sitio funciona igual pero pierde el amortiguador ante
-caídas de Jolpica y el rate-limit de login/registro.
-
-### 4) Secret de identidad (obligatorio para que las cookies anónimas sean seguras)
-
-A diferencia de D1/KV, los **secrets sí son consistentes** entre CLI y
-dashboard — cualquiera de los dos métodos funciona:
+### 2) Crear D1 y KV (si todavía no existen)
 
 ```bash
-npx wrangler pages secret put IDENTITY_SECRET --project-name=f1-hub
+npx wrangler d1 create f1hub-db
+npx wrangler kv namespace create F1_KV
+```
+
+Cada comando te devuelve un ID. **Si ya los habías creado antes, no
+hace falta repetir esto** — solo copiá los IDs existentes desde el
+dashboard (Storage & Databases → D1 / KV, click en el recurso, el ID
+aparece en Overview).
+
+### 3) Completar `wrangler.toml` con esos IDs
+
+Abrí `wrangler.toml` y confirmá que `database_id` y el `id` del KV
+coincidan con los tuyos:
+
+```toml
+[[d1_databases]]
+binding = "F1_DB"
+database_name = "f1hub-db"
+database_id = "TU_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "F1_KV"
+id = "TU_KV_ID"
+```
+
+### 4) Aplicar las migraciones (una sola vez, o cuando agregues una nueva)
+
+```bash
+npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
+```
+
+### 5) Cargar el secret de identidad (una sola vez)
+
+```bash
+npx wrangler pages secret put IDENTITY_SECRET --project-name=f1hub
 # cualquier string largo y random, ej: openssl rand -hex 32
 ```
-(o desde el dashboard: Settings → Environment variables → Add → tildar "Encrypt").
 
-### 5) Convertirte en administrador
+### 6) Desplegar
 
-Una vez que te registrás desde el sitio (botón 👤 > Crear cuenta), corré:
+```bash
+npx wrangler pages deploy web --project-name=f1hub
+```
+
+Este comando sube el contenido de `web/` + las funciones de
+`functions/`, **con los bindings de D1/KV ya incluidos**, sin pasar
+por el botón roto del dashboard en ningún momento. Te va a devolver una
+URL — esa es tu sitio actualizado.
+
+**A partir de ahora, este es el comando que corrés cada vez que querés
+publicar cambios** (en vez de, o además de, hacer push a GitHub).
+
+### 7) Importante: evitar que el deploy automático de GitHub pise este
+
+Si tu proyecto todavía tiene conectado el repo de GitHub con deploy
+automático, **cada push va a disparar OTRO deploy que no tiene los
+bindings** (porque ese camino ignora `wrangler.toml`), y podría
+pisar el deploy bueno que acabás de hacer por CLI.
+
+Para evitarlo — dashboard → proyecto `f1hub` → **Settings → Builds &
+deployments** → **Automatic deployments** → **desactivalo**. Github
+sigue sirviendo como respaldo de tu código, simplemente ya no dispara
+deploys solo; el deploy real pasa a ser siempre el comando del paso 6.
+
+*(Alternativa más avanzada, opcional: automatizar el paso 6 con GitHub
+Actions para que siga siendo "push y listo" pero usando Wrangler en vez
+del integración nativa — preguntame si querés armar eso.)*
+
+### 8) Hacerte administrador
+
+Una vez que te registrás desde el sitio (botón 👤 → Crear cuenta
+nueva):
 
 ```bash
 npx wrangler d1 execute f1hub-db --remote --command="UPDATE users SET is_admin = 1 WHERE email = 'tu@mail.com'"
@@ -120,64 +133,27 @@ npx wrangler d1 execute f1hub-db --remote --command="UPDATE users SET is_admin =
 
 Después entrá a `/admin.html`.
 
-### 6) Opcional — Login con Google/GitHub
+### 9) Notificaciones push + campeonatos precalculados (opcional)
 
-**Google**: [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-→ Create Credentials → OAuth Client ID → tipo "Web application" →
-Authorized redirect URI: `https://TU_DOMINIO/api/auth/oauth/google-callback`.
+Dependen de un Worker aparte (`cron-worker/`) — ver su propio README.
+Mismo criterio: `wrangler deploy` desde esa carpeta, sin pasar por el
+dashboard para los bindings.
 
-**GitHub**: Settings → Developer settings → OAuth Apps → New OAuth App
-→ Authorization callback URL: `https://TU_DOMINIO/api/auth/oauth/github-callback`.
+### 10) Opcional — Login con Google/GitHub, email de recuperación
 
-Cargá los 4 secrets:
-```bash
-npx wrangler pages secret put GOOGLE_CLIENT_ID --project-name=f1-hub
-npx wrangler pages secret put GOOGLE_CLIENT_SECRET --project-name=f1-hub
-npx wrangler pages secret put GITHUB_CLIENT_ID --project-name=f1-hub
-npx wrangler pages secret put GITHUB_CLIENT_SECRET --project-name=f1-hub
-```
-Sin esto, los botones de Google/GitHub responden 503 con un mensaje
-claro — el login con email/contraseña funciona igual sin esto.
+Igual que antes: registrar las apps OAuth y/o Resend, cargar los
+secrets correspondientes con `wrangler pages secret put`. Ver
+`cron-worker/README.md` y los comentarios en `functions/api/auth/`
+para el detalle exacto de cada secret.
 
-### 7) Opcional — Email transaccional (verificación / reset de contraseña)
-
-Hoy las cuentas quedan **auto-verificadas** (no hay envío de mail
-todavía). Para activarlo: creá cuenta en [Resend](https://resend.com),
-verificá tu dominio, y:
-```bash
-npx wrangler pages secret put RESEND_API_KEY --project-name=f1-hub
-```
-En cuanto ese secret exista, `register.js` deja de auto-verificar y
-falta cablear el envío del mail (marcado con `TODO` en el archivo) —
-avisame cuando tengas la cuenta de Resend y lo termino.
-
-### 8) Cloudflare Web Analytics (opcional, recomendado)
-
-Dashboard del proyecto de Pages → Analytics & Logs → Web Analytics →
-activar. Te da visitas, países, dispositivos y navegadores sin cookies
-y sin tocar código — es lo que usa el punto 6 del pedido original en
-vez de reinventar tracking propio.
-
-### 9) Notificaciones push + campeonatos precalculados
-
-Ambos dependen de un Worker aparte (Pages no soporta Cron Triggers).
-Ver `cron-worker/README.md` — son ~5 minutos de setup, las claves
-VAPID ya están generadas.
-
-## Pruebas end-to-end contra el sitio real (antes de cada release)
+## Verificar que todo quedó bien
 
 ```bash
-node scripts/e2e-smoke-test.mjs https://tu-sitio.pages.dev
+node scripts/e2e-smoke-test.mjs https://TU-SITIO.pages.dev
 ```
 
-Corre contra tu despliegue real (Pages + D1 + KV reales, no un mock):
-config, calendario, posiciones, buscador, comparador, y si las cuentas
-están activadas, registro → sesión → favoritos (agregar/sacar) →
-encuesta → logout, con un usuario de prueba descartable. Requiere
-Node 18+, no instala nada. Si algo falla, el mensaje de error apunta a
-qué archivo/migración revisar — por ejemplo, un fallo en el registro
-con una respuesta no-JSON casi siempre significa una migración de D1
-faltante.
+Si `GET /api/config` devuelve `accounts:true` y el resto de los tests
+pasan, los bindings están funcionando.
 
 ## Estructura
 
