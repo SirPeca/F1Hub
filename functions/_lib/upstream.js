@@ -85,7 +85,6 @@ export function jsonResponse(obj, status = 200, { cache, cacheKey, ttl } = {}) {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
       ...(ttl ? { 'Cache-Control': `public, max-age=${ttl}` } : { 'Cache-Control': 'no-store' }),
     },
   });

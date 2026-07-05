@@ -136,7 +136,7 @@ export async function onRequestGet(context) {
 
     return jsonResponse(payload, 200, cache, cacheKey, CACHE_TTL_LIVE);
   } catch (err) {
-    return jsonResponse({ liveDataAvailable: false, reason: 'error', message: String(err) }, 200, cache, cacheKey, CACHE_TTL_IDLE);
+    return jsonResponse({ liveDataAvailable: false, reason: 'error' }, 200, cache, cacheKey, CACHE_TTL_IDLE);
   }
 }
 
@@ -145,7 +145,6 @@ function jsonResponse(obj, status = 200, cache, cacheKey, ttl) {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': `public, max-age=${ttl}`,
     },
   });

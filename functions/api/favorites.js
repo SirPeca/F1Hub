@@ -3,9 +3,16 @@
 //
 // GET  /api/favorites              -> lista de favoritos de esta identidad
 // POST /api/favorites {kind,refId,label} -> toggle (agrega si no está, saca si ya está)
+//
+// Hardening: refId y label se sanitizan y acotan en longitud del lado
+// del servidor. No confiamos en que el valor venga siempre de nuestra
+// propia UI — cualquiera puede pegarle directo a este endpoint.
 // =========================================
 
+import { checkRateLimit, clientIp } from '../_lib/ratelimit.js';
+
 const VALID_KINDS = ['driver', 'constructor', 'circuit'];
+const MAX_LEN = 80;
 
 export async function onRequestGet(context) {
   const { env, data } = context;
@@ -24,9 +31,16 @@ export async function onRequestPost(context) {
   if (!env.F1_DB) return json({ error: 'not_configured' }, 503);
   if (!data.identityId) return json({ error: 'no_identity' }, 400);
 
+  const allowed = await checkRateLimit(env.F1_KV, `favorites:${data.identityId || clientIp(request)}`, 60, 300);
+  if (!allowed) return json({ error: 'rate_limited' }, 429);
+
   let body;
   try { body = await request.json(); } catch { return json({ error: 'invalid_body' }, 400); }
-  const { kind, refId, label } = body;
+
+  const kind = String(body.kind || '');
+  const refId = sanitize(body.refId);
+  const label = sanitize(body.label) || refId;
+
   if (!VALID_KINDS.includes(kind) || !refId) return json({ error: 'invalid_fields' }, 400);
 
   const existing = await env.F1_DB.prepare(
@@ -42,8 +56,12 @@ export async function onRequestPost(context) {
 
   await env.F1_DB.prepare(
     'INSERT INTO favorites (identity_id, kind, ref_id, label) VALUES (?, ?, ?, ?)'
-  ).bind(data.identityId, kind, refId, label ?? refId).run();
+  ).bind(data.identityId, kind, refId, label).run();
   return json({ favorited: true });
+}
+
+function sanitize(raw) {
+  return String(raw ?? '').replace(/[<>]/g, '').trim().slice(0, MAX_LEN);
 }
 
 function json(obj, status = 200) {

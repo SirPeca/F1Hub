@@ -46,7 +46,7 @@ export async function onRequestGet(context) {
     };
     return respond(payload, cache, cacheKey);
   } catch (err) {
-    return json({ found: false, error: String(err) }, 200);
+    return json({ found: false }, 200);
   }
 }
 

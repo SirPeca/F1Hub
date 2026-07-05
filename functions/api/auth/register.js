@@ -27,7 +27,7 @@ export async function onRequestPost(context) {
 
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
-  const nickname = String(body.nickname || '').trim().slice(0, 40) || email.split('@')[0];
+  const nickname = sanitizeNickname(body.nickname) || email.split('@')[0];
 
   if (!isValidEmail(email)) return json({ error: 'invalid_email' }, 400);
   if (password.length < 8) return json({ error: 'weak_password', message: 'La contraseña debe tener al menos 8 caracteres.' }, 400);
@@ -67,6 +67,12 @@ export async function onRequestPost(context) {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Defensa en profundidad: el frontend ya escapa al renderizar, pero
+// tampoco dejamos que caracteres de marcado lleguen a viajar hasta D1.
+function sanitizeNickname(raw) {
+  return String(raw || '').replace(/[<>]/g, '').trim().slice(0, 40);
 }
 
 function json(obj, status = 200) {

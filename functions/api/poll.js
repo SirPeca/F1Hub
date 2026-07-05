@@ -19,6 +19,7 @@
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
+import { checkRateLimit } from '../_lib/ratelimit.js';
 
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
 
@@ -72,10 +73,15 @@ export async function onRequestPost(context) {
   if (!env.F1_DB) return json({ error: 'not_configured' }, 503);
   if (!data.identityId) return json({ error: 'no_identity' }, 400);
 
+  const allowed = await checkRateLimit(env.F1_KV, `poll-vote:${data.identityId}`, 20, 300);
+  if (!allowed) return json({ error: 'rate_limited' }, 429);
+
   let body;
   try { body = await request.json(); } catch { return json({ error: 'invalid_body' }, 400); }
   const { pollId, driverId } = body;
-  if (!pollId || !driverId) return json({ error: 'missing_fields' }, 400);
+  if (!pollId || !driverId || !/^[a-z0-9_-]{1,40}$/i.test(String(driverId))) {
+    return json({ error: 'invalid_fields' }, 400);
+  }
 
   const poll = await env.F1_DB.prepare('SELECT * FROM gp_polls WHERE id = ?').bind(pollId).first();
   if (!poll) return json({ error: 'poll_not_found' }, 404);

@@ -14,6 +14,8 @@
 // en `context.data.identityId` — este archivo no toca cookies directo.
 // =========================================
 
+import { checkRateLimit } from '../_lib/ratelimit.js';
+
 export async function onRequestGet(context) {
   const { env, data } = context;
   if (!env.F1_DB) return notConfigured();
@@ -27,6 +29,9 @@ export async function onRequestGet(context) {
 export async function onRequestPost(context) {
   const { env, data } = context;
   if (!env.F1_DB) return notConfigured();
+
+  const allowed = await checkRateLimit(env.F1_KV, `likes:${data.identityId}`, 20, 60);
+  if (!allowed) return json({ error: 'rate_limited' }, 429);
 
   const already = await hasLiked(env.F1_DB, data.identityId);
 

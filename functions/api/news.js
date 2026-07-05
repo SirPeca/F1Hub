@@ -11,9 +11,8 @@
 // =========================================
 
 const FEEDS = [
-  { source: 'Autosport', url: 'https://www.autosport.com/rss/f1/news/' },
-  { source: 'Motorsport.com', url: 'https://www.motorsport.com/rss/f1/news/' },
-  { source: 'RaceFans', url: 'https://www.racefans.net/feed/' },
+  { source: 'Motorsport.com', url: 'https://es.motorsport.com/rss/f1/news/', filterF1: false },
+  { source: 'F1Latam', url: 'https://www.f1latam.com/rss/rss.php', filterF1: true }, // feed mixto de automovilismo: filtramos por título
 ];
 
 const CACHE_TTL = 600; // 10 min
@@ -57,7 +56,7 @@ export async function onRequestGet(context) {
   return jsonResponse({ updatedAt: new Date().toISOString(), sourceStatus, items }, 200, cache, cacheKey, CACHE_TTL);
 }
 
-async function fetchFeed({ source, url }) {
+async function fetchFeed({ source, url, filterF1 }) {
   const res = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; f1hub/1.0; +https://pages.dev) NewsAggregator',
@@ -66,7 +65,12 @@ async function fetchFeed({ source, url }) {
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${source}`);
   const xml = await res.text();
-  return parseRss(xml, source);
+  const items = parseRss(xml, source);
+  if (!filterF1) return items;
+
+  // Feeds mixtos (ej: F1Latam también reparte noticias generales de autos)
+  // — nos quedamos solo con lo que menciona F1/Fórmula 1 en el título.
+  return items.filter((it) => /\bf[oó]rmula\s*1\b|\bf1\b/i.test(it.title));
 }
 
 function parseRss(xml, source) {
@@ -122,7 +126,6 @@ function jsonResponse(obj, status = 200, cache, cacheKey, ttl) {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': `public, max-age=${ttl}`,
     },
   });

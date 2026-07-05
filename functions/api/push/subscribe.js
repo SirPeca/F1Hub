@@ -3,10 +3,15 @@
 // POST /api/push/subscribe  { endpoint, keys: { p256dh, auth } }
 // =========================================
 
+import { checkRateLimit } from '../../_lib/ratelimit.js';
+
 export async function onRequestPost(context) {
   const { request, env, data } = context;
   if (!env.F1_DB) return json({ error: 'not_configured' }, 503);
   if (!data.identityId) return json({ error: 'no_identity' }, 400);
+
+  const allowed = await checkRateLimit(env.F1_KV, `push-sub:${data.identityId}`, 10, 3600);
+  if (!allowed) return json({ error: 'rate_limited' }, 429);
 
   let body;
   try { body = await request.json(); } catch { return json({ error: 'invalid_body' }, 400); }

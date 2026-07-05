@@ -17,6 +17,18 @@ const state = {
   countdownTimer: null,
 };
 
+// Escapa cualquier texto que venga de fuentes externas (RSS, nombres
+// de pilotos vía API) o directamente del usuario (nickname, favoritos)
+// antes de insertarlo en innerHTML. Sin esto, un feed RSS comprometido
+// o una llamada directa a nuestra propia API (sin pasar por la UI)
+// podría inyectar HTML/JS ejecutable.
+function esc(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // ---------- init ----------
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
@@ -50,6 +62,7 @@ async function loadConfig() {
   }
   if (!state.config.likesAndVotesAndFavorites) {
     document.getElementById('like-btn').hidden = true;
+    document.querySelector('[data-tab="favoritos"]').hidden = true;
   }
 }
 
@@ -184,7 +197,7 @@ function renderUnavailable(heroEl, secondaryEl, label) {
   heroEl.innerHTML = `
     <div class="hero-eyebrow"><span class="dot"></span>SERVICIO NO DISPONIBLE</div>
     <div class="hero-title">No pudimos traer el ${label} en este momento</div>
-    <div class="hero-meta">El proveedor de datos (Jolpica-F1) está temporalmente caído. Esto no depende del sitio — reintentá en unos minutos.</div>
+    <div class="hero-meta">No pudimos traer la información en este momento. Esto no depende de tu conexión — reintentá en unos minutos.</div>
     <button class="retry-btn" onclick="location.reload()">Reintentar</button>
   `;
   if (secondaryEl) { secondaryEl.classList.remove('skeleton-block'); secondaryEl.innerHTML = ''; }
@@ -193,7 +206,7 @@ function renderUnavailable(heroEl, secondaryEl, label) {
 function showStaleBanner(container) {
   const badge = document.createElement('div');
   badge.className = 'stale-banner';
-  badge.textContent = '⚠️ Mostrando la última copia guardada — el proveedor de datos está lento o caído, reintentando en segundo plano.';
+  badge.textContent = '⚠️ Mostrando la última información guardada — actualizando en segundo plano.';
   container.prepend(badge);
 }
 
@@ -408,7 +421,7 @@ async function loadStandings() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadStandings()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadStandings()">Reintentar</button></div>`;
       return;
     }
     if (!data.standings.length) {
@@ -488,7 +501,7 @@ async function loadHistoryYear() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadHistoryYear()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadHistoryYear()">Reintentar</button></div>`;
       return;
     }
 
@@ -534,7 +547,7 @@ async function loadHistoryCircuit() {
     el.classList.remove('skeleton-block');
 
     if (data.unavailable) {
-      el.innerHTML = `<div class="live-empty">El proveedor de datos está temporalmente caído. <button class="retry-btn-inline" onclick="loadHistoryCircuit()">Reintentar</button></div>`;
+      el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" onclick="loadHistoryCircuit()">Reintentar</button></div>`;
       return;
     }
     if (!data.winners.length) {
@@ -573,9 +586,9 @@ async function loadNews() {
     }
     listEl.innerHTML = data.items.map((n) => `
       <a class="news-item" href="${n.link}" target="_blank" rel="noopener noreferrer">
-        <div class="news-meta"><span>${n.source}</span><span>${fmtDate(n.pubDate)} · ${fmtTime(n.pubDate)}</span></div>
-        <div class="news-title">${n.title}</div>
-        ${n.summary ? `<div class="news-summary">${n.summary}</div>` : ''}
+        <div class="news-meta"><span>${esc(n.source)}</span><span>${fmtDate(n.pubDate)} · ${fmtTime(n.pubDate)}</span></div>
+        <div class="news-title">${esc(n.title)}</div>
+        ${n.summary ? `<div class="news-summary">${esc(n.summary)}</div>` : ''}
       </a>
     `).join('');
   } catch {
@@ -631,7 +644,7 @@ async function toggleFavorite(kind, refId, label, btnEl) {
     if (!res.ok) {
       btnEl.classList.toggle('is-fav'); // revertir el optimismo
       toast(data.error === 'not_configured'
-        ? 'Los favoritos todavía no están activados en este sitio (falta configurar la base de datos).'
+        ? 'Esta función estará disponible próximamente.'
         : 'No se pudo guardar el favorito. Probá de nuevo.');
       return;
     }
@@ -665,7 +678,7 @@ async function loadFavorites() {
   const el = document.getElementById('favorites-list');
   if (!state.config.likesAndVotesAndFavorites) {
     el.classList.remove('skeleton-block');
-    el.innerHTML = `<div class="live-empty">Próximamente — esta función necesita que el sitio tenga la base de datos configurada.</div>`;
+    el.innerHTML = `<div class="live-empty">Esta función estará disponible próximamente.</div>`;
     return;
   }
   el.classList.add('skeleton-block');
@@ -681,7 +694,7 @@ async function loadFavorites() {
       if (!items.length) return '';
       return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
         <div class="favorite-row">
-          <span>${f.label}</span>
+          <span>${esc(f.label)}</span>
           <button class="favorite-star is-fav" onclick="toggleFavorite('${f.kind}','${f.refId}',${JSON.stringify(f.label)},this); this.closest('.favorite-row').remove()">★</button>
         </div>
       `).join('');
@@ -855,8 +868,8 @@ function renderAccountOverlay() {
     titleEl.textContent = 'Mi cuenta';
     el.innerHTML = `
       <div class="account-profile">
-        <div class="hero-title" style="font-size:16px">${state.currentUser.nickname || state.currentUser.email}</div>
-        <div class="hero-meta">${state.currentUser.email}</div>
+        <div class="hero-title" style="font-size:16px">${esc(state.currentUser.nickname || state.currentUser.email)}</div>
+        <div class="hero-meta">${esc(state.currentUser.email)}</div>
         ${state.currentUser.isAdmin ? '<p class="favorites-hint">Tenés permisos de administrador — <a href="/admin.html" style="color:var(--gold)">ir al panel</a>.</p>' : ''}
         <button class="retry-btn" style="width:100%;margin-top:16px" id="logout-btn">Cerrar sesión</button>
       </div>
@@ -921,7 +934,7 @@ function showForgotPasswordForm() {
         msgEl.textContent = 'Listo — si el email existe, te llegó un link para elegir una contraseña nueva.';
       } else {
         msgEl.style.color = 'var(--red-hi)';
-        msgEl.textContent = 'La recuperación por email todavía no está activada en este sitio. Contactá al administrador.';
+        msgEl.textContent = 'Esta función estará disponible próximamente. Mientras tanto, contactá al administrador del sitio.';
       }
     } catch {
       msgEl.style.color = 'var(--red-hi)';
@@ -1004,7 +1017,7 @@ function friendlyAuthError(code) {
     weak_password: 'La contraseña debe tener al menos 8 caracteres.',
     invalid_email: 'Ese email no parece válido.',
     rate_limited: 'Demasiados intentos. Probá de nuevo en unos minutos.',
-    not_configured: 'Las cuentas todavía no están activadas en este sitio.',
+    not_configured: 'Esta función estará disponible próximamente.',
   };
   return map[code] || 'Algo salió mal. Probá de nuevo.';
 }
