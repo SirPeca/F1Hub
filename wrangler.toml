@@ -6,9 +6,9 @@ pages_build_output_dir = "web"
 # 1) npx wrangler d1 create f1hub-db
 # 2) copiá el database_id que te devuelve y descomentá:
 # [[d1_databases]]
-# binding = "F1_DB"
-# database_name = "f1hub-db"
-# database_id = "TU_DATABASE_ID_AQUI"
+binding = "F1_DB"
+database_name = "f1hub-db"
+database_id = "a72321ce-810f-4662-b3bd-8582206ea473"
 #
 # 3) aplicá el esquema:
 #    npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
