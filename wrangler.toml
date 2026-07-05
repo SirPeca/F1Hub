@@ -1,15 +1,16 @@
-name = "f1-hub"
+name = "f1hub"
 compatibility_date = "2026-02-02"
 pages_build_output_dir = "web"
 
 # ---- D1: base de datos relacional (Fase A/D — identidades, likes, votos, favoritos, usuarios) ----
 # 1) npx wrangler d1 create f1hub-db
 # 2) copiá el database_id que te devuelve y descomentá:
-# [[d1_databases]]
+
+[[d1_databases]]
 binding = "F1_DB"
 database_name = "f1hub-db"
 database_id = "a72321ce-810f-4662-b3bd-8582206ea473"
-#
+
 # 3) aplicá el esquema:
 #    npx wrangler d1 execute f1hub-db --file=migrations/0001_init.sql --remote
 #
@@ -28,9 +29,10 @@ database_id = "a72321ce-810f-4662-b3bd-8582206ea473"
 #
 # 1) npx wrangler kv namespace create F1_KV
 # 2) copiá el id que te devuelve y descomentá estas líneas:
-# [[kv_namespaces]]
-# binding = "F1_KV"
-# id = "TU_ID_AQUI"
+#
+[[kv_namespaces]]
+binding = "F1_KV"
+id = "43fbd7d481054fa0a623eebbf93e47db"
 #
 # (también se puede crear y bindear desde el dashboard de Cloudflare Pages:
 # Settings > Functions > KV namespace bindings)
@@ -39,5 +41,7 @@ database_id = "a72321ce-810f-4662-b3bd-8582206ea473"
 # Si en el futuro sumás una cuenta "supporter" de OpenF1 (para datos en vivo
 # reales durante la sesión), agregá el secret OPENF1_TOKEN desde el dashboard
 # de Cloudflare Pages (Settings > Environment variables > Encrypt) o con:
-#   npx wrangler pages secret put OPENF1_TOKEN
+#
+# npx wrangler pages secret put OPENF1_TOKEN
+#
 # La función functions/api/live.js lo detecta automáticamente si existe.
