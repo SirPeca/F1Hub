@@ -127,6 +127,9 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{ou
 .favorites-group-title{font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.6px;margin:16px 0 8px}
 .favorites-group-title:first-child{margin-top:0}
 .favorite-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg1);border-radius:8px;margin-bottom:6px;border:1px solid var(--bord-soft)}
+.favorite-row-rich{display:block}
+.favorite-row-top{display:flex;justify-content:space-between;align-items:center}
+.favorite-stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--bord-soft);font-size:11px;color:var(--sub);font-family:var(--mono)}
 .favorites-hint{font-size:11px;color:var(--dim);text-align:center;margin-top:16px;line-height:1.6}
 
 /* =========================================

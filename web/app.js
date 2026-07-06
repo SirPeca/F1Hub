@@ -768,12 +768,32 @@ async function loadFavorites() {
       const items = favs.filter((f) => f.kind === kind);
       if (!items.length) return '';
       return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
-        <div class="favorite-row">
-          <span>${esc(f.label)}</span>
-          <button class="favorite-star is-fav" data-action="remove-favorite-row" data-kind="${esc(f.kind)}" data-ref-id="${esc(f.refId)}" data-label="${esc(f.label)}">★</button>
+        <div class="favorite-row favorite-row-rich" data-fav-kind="${esc(f.kind)}" data-fav-id="${esc(f.refId)}">
+          <div class="favorite-row-top">
+            <span>${esc(f.label)}</span>
+            <button class="favorite-star is-fav" data-action="remove-favorite-row" data-kind="${esc(f.kind)}" data-ref-id="${esc(f.refId)}" data-label="${esc(f.label)}">★</button>
+          </div>
+          ${f.kind === 'driver' ? `<div class="favorite-stats" id="fav-stats-${esc(f.refId)}">Cargando estadísticas…</div>` : ''}
         </div>
       `).join('');
     }).join('');
+
+    // Estadísticas reales por piloto favorito (en paralelo, no bloquea el render de la lista)
+    favs.filter((f) => f.kind === 'driver').forEach(async (f) => {
+      const statsEl = document.getElementById(`fav-stats-${f.refId}`);
+      if (!statsEl) return;
+      try {
+        const s = await fetchJSON(`/api/driver-summary?id=${encodeURIComponent(f.refId)}`);
+        statsEl.innerHTML = `
+          <span>🏆 ${s.wins} victorias</span>
+          <span>🥇 ${s.podiums} podios</span>
+          <span>⏱️ ${s.poles} poles</span>
+          ${s.nationality ? `<span>🌍 ${esc(s.nationality)}</span>` : ''}
+        `;
+      } catch {
+        statsEl.textContent = 'No se pudieron cargar las estadísticas.';
+      }
+    });
   } catch {
     el.classList.remove('skeleton-block');
     el.innerHTML = `<div class="live-empty">No se pudieron cargar los favoritos.</div>`;
