@@ -16,7 +16,10 @@ const IDLE_TIMEOUT_SECONDS = 60 * 60 * 24 * 7; // 7 días sin uso — cierra sol
 export async function createSession(db, userId) {
   const token = crypto.randomUUID() + crypto.randomUUID(); // 288 bits de entropía
   const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString();
-  await db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
+  // last_seen_at explícito: el default de la columna es solo una
+  // constante vacía (ver migración 0005), así que cada sesión nueva
+  // tiene que setearlo acá, no puede confiar en el default de la tabla.
+  await db.prepare('INSERT INTO sessions (id, user_id, expires_at, last_seen_at) VALUES (?, ?, ?, datetime("now"))')
     .bind(token, userId, expiresAt).run();
   return { token, expiresAt };
 }
