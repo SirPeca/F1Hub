@@ -24,47 +24,51 @@ const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
 
 export async function onRequestGet(context) {
   const { env, data } = context;
-  if (!env.F1_DB) return json({ configured: false, note: 'F1_DB no está bindeado.' });
+  if (!env.F1_DB) return json({ configured: false });
 
   const target = await resolveTargetRace(env);
-  if (!target) return json({ configured: true, poll: null, note: 'No hay ningún Gran Premio próximo.' });
+  if (!target) return json({ configured: true, poll: null });
 
-  const poll = await ensurePoll(env.F1_DB, target);
-  const now = Date.now();
-  const isOpen = now >= new Date(poll.opens_at).getTime() && now < new Date(poll.closes_at).getTime();
-  const isClosed = now >= new Date(poll.closes_at).getTime();
+  try {
+    const poll = await ensurePoll(env.F1_DB, target);
+    const now = Date.now();
+    const isOpen = now >= new Date(poll.opens_at).getTime() && now < new Date(poll.closes_at).getTime();
+    const isClosed = now >= new Date(poll.closes_at).getTime();
 
-  const [driversRes, votesRes, yourVoteRow] = await Promise.all([
-    fetchResilient(`${JOLPICA_BASE}/current/driverStandings.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null, staleKey: 'stale:poll:drivers' }),
-    env.F1_DB.prepare('SELECT driver_id, COUNT(*) as votes FROM gp_poll_votes WHERE poll_id = ? GROUP BY driver_id').bind(poll.id).all(),
-    data.identityId ? env.F1_DB.prepare('SELECT driver_id FROM gp_poll_votes WHERE poll_id = ? AND identity_id = ?').bind(poll.id, data.identityId).first() : null,
-  ]);
+    const [driversRes, votesRes, yourVoteRow] = await Promise.all([
+      fetchResilient(`${JOLPICA_BASE}/current/driverStandings.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null, staleKey: 'stale:poll:drivers' }),
+      env.F1_DB.prepare('SELECT driver_id, COUNT(*) as votes FROM gp_poll_votes WHERE poll_id = ? GROUP BY driver_id').bind(poll.id).all(),
+      data.identityId ? env.F1_DB.prepare('SELECT driver_id FROM gp_poll_votes WHERE poll_id = ? AND identity_id = ?').bind(poll.id, data.identityId).first() : null,
+    ]);
 
-  const driverList = driversRes.ok
-    ? (driversRes.data?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings ?? []).map((d) => ({
-        driverId: d.Driver?.driverId, code: d.Driver?.code, name: `${d.Driver?.givenName} ${d.Driver?.familyName}`,
-      }))
-    : [];
+    const driverList = driversRes.ok
+      ? (driversRes.data?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings ?? []).map((d) => ({
+          driverId: d.Driver?.driverId, code: d.Driver?.code, name: `${d.Driver?.givenName} ${d.Driver?.familyName}`,
+        }))
+      : [];
 
-  const voteCounts = Object.fromEntries((votesRes?.results ?? []).map((r) => [r.driver_id, r.votes]));
-  const totalVotes = Object.values(voteCounts).reduce((a, b) => a + b, 0);
+    const voteCounts = Object.fromEntries((votesRes?.results ?? []).map((r) => [r.driver_id, r.votes]));
+    const totalVotes = Object.values(voteCounts).reduce((a, b) => a + b, 0);
 
-  const options = driverList.map((d) => ({
-    ...d,
-    votes: voteCounts[d.driverId] ?? 0,
-    percentage: totalVotes ? Math.round(((voteCounts[d.driverId] ?? 0) / totalVotes) * 1000) / 10 : 0,
-  }));
+    const options = driverList.map((d) => ({
+      ...d,
+      votes: voteCounts[d.driverId] ?? 0,
+      percentage: totalVotes ? Math.round(((voteCounts[d.driverId] ?? 0) / totalVotes) * 1000) / 10 : 0,
+    }));
 
-  return json({
-    configured: true,
-    poll: {
-      id: poll.id, season: poll.season, round: poll.round, sessionType: poll.session_type,
-      raceName: target.raceName, opensAt: poll.opens_at, closesAt: poll.closes_at,
-      isOpen, isClosed, totalVotes, options,
-      yourVote: yourVoteRow?.driver_id ?? null,
-      winnerDriverId: poll.winner_driver_id ?? null,
-    },
-  });
+    return json({
+      configured: true,
+      poll: {
+        id: poll.id, season: poll.season, round: poll.round, sessionType: poll.session_type,
+        raceName: target.raceName, opensAt: poll.opens_at, closesAt: poll.closes_at,
+        isOpen, isClosed, totalVotes, options,
+        yourVote: yourVoteRow?.driver_id ?? null,
+        winnerDriverId: poll.winner_driver_id ?? null,
+      },
+    });
+  } catch {
+    return json({ configured: true, poll: null, error: 'server_error' });
+  }
 }
 
 export async function onRequestPost(context) {
@@ -90,18 +94,21 @@ export async function onRequestPost(context) {
   if (now >= new Date(poll.closes_at).getTime()) return json({ error: 'poll_closed' }, 403);
 
   try {
-    await env.F1_DB.prepare(
-      'INSERT INTO gp_poll_votes (poll_id, identity_id, driver_id) VALUES (?, ?, ?)'
-    ).bind(pollId, data.identityId, driverId).run();
+    try {
+      await env.F1_DB.prepare(
+        'INSERT INTO gp_poll_votes (poll_id, identity_id, driver_id) VALUES (?, ?, ?)'
+      ).bind(pollId, data.identityId, driverId).run();
+    } catch {
+      // UNIQUE(poll_id, identity_id) ya cubierto: si falla es porque ya votó.
+      // Permitimos "cambiar el voto" mientras la encuesta siga abierta.
+      await env.F1_DB.prepare(
+        'UPDATE gp_poll_votes SET driver_id = ?, voted_at = datetime("now") WHERE poll_id = ? AND identity_id = ?'
+      ).bind(driverId, pollId, data.identityId).run();
+    }
+    return json({ ok: true });
   } catch {
-    // UNIQUE(poll_id, identity_id) ya cubierto: si falla es porque ya votó.
-    // Permitimos "cambiar el voto" mientras la encuesta siga abierta.
-    await env.F1_DB.prepare(
-      'UPDATE gp_poll_votes SET driver_id = ?, voted_at = datetime("now") WHERE poll_id = ? AND identity_id = ?'
-    ).bind(driverId, pollId, data.identityId).run();
+    return json({ error: 'server_error' }, 500);
   }
-
-  return json({ ok: true });
 }
 
 /** Determina qué carrera/sesión corresponde votar ahora: la que está en

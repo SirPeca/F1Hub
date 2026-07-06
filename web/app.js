@@ -485,6 +485,19 @@ function populateYearSelect(sel, min, max, def) {
   sel.innerHTML = opts.join('');
 }
 
+function describeStandingsRound(data) {
+  if (!data.round) return '';
+  // Si es la temporada actual y ya tenemos el calendario cargado,
+  // mostramos el nombre del GP en vez de solo el número de ronda —
+  // mucho más claro para confirmar que los puntos están al día.
+  const race = calendarData?.season === String(data.season)
+    ? calendarData.races.find((r) => r.round === data.round)
+    : null;
+  return race
+    ? `Actualizado tras el ${race.raceName} (ronda ${data.round})`
+    : `Clasificación tras la ronda ${data.round}`;
+}
+
 async function loadStandings() {
   const type = document.querySelector('[data-standings].active').dataset.standings;
   const year = document.getElementById('standings-year').value;
@@ -498,12 +511,15 @@ async function loadStandings() {
 
     if (data.unavailable) {
       el.innerHTML = `<div class="live-empty">No pudimos traer la información en este momento. <button class="retry-btn-inline" data-action="retry-standings">Reintentar</button></div>`;
+      document.getElementById('standings-updated-note').textContent = '';
       return;
     }
     if (!data.standings.length) {
       el.innerHTML = `<div class="live-empty">${data.note || 'Sin datos para esta temporada.'}</div>`;
+      document.getElementById('standings-updated-note').textContent = '';
       return;
     }
+    document.getElementById('standings-updated-note').textContent = describeStandingsRound(data);
     const staleNote = data.stale ? `<div class="stale-banner">⚠️ Datos guardados — actualizando en segundo plano.</div>` : '';
     el.innerHTML = staleNote + data.standings.map((s) => {
       if (type === 'drivers') {
@@ -810,6 +826,8 @@ function setupCompare() {
   wireCompareInput('b');
 }
 
+const compareReqSeq = { a: 0, b: 0 };
+
 function wireCompareInput(side) {
   const input = document.getElementById(`compare-${side}`);
   const resultsEl = document.getElementById(`compare-${side}-results`);
@@ -819,22 +837,29 @@ function wireCompareInput(side) {
     clearTimeout(debounce);
     const q = input.value.trim();
     compareSelection[side] = null;
+    const mySeq = ++compareReqSeq[side]; // cualquier respuesta vieja que llegue después se ignora
     if (q.length < 2) { resultsEl.hidden = true; return; }
     debounce = setTimeout(async () => {
       try {
         const data = await fetchJSON(`/api/search?q=${encodeURIComponent(q)}`);
+        // Si mientras esperábamos la red el usuario ya escribió más o
+        // hizo click en una sugerencia, esta respuesta quedó vieja —
+        // aplicarla igual es justo el bug que reabría el desplegable
+        // después de seleccionar. La ignoramos.
+        if (mySeq !== compareReqSeq[side]) return;
         const drivers = data.drivers || [];
         resultsEl.hidden = drivers.length === 0;
         resultsEl.innerHTML = drivers.map((d) =>
           `<div class="autocomplete-item" data-action="select-compare-driver" data-side="${esc(side)}" data-id="${esc(d.id)}" data-label="${esc(d.label)}">${esc(d.label)}</div>`
         ).join('');
-      } catch { resultsEl.hidden = true; }
+      } catch { if (mySeq === compareReqSeq[side]) resultsEl.hidden = true; }
     }, 250);
   });
 }
 
 function selectCompareDriver(side, id, label) {
   compareSelection[side] = id;
+  compareReqSeq[side]++; // cualquier búsqueda todavía en vuelo para este lado queda invalidada
   document.getElementById(`compare-${side}`).value = label;
   document.getElementById(`compare-${side}-results`).hidden = true;
   const runBtn = document.getElementById('run-compare-btn');

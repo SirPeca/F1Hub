@@ -33,18 +33,22 @@ export async function onRequestPost(context) {
   const allowed = await checkRateLimit(env.F1_KV, `likes:${data.identityId}`, 20, 60);
   if (!allowed) return json({ error: 'rate_limited' }, 429);
 
-  const already = await hasLiked(env.F1_DB, data.identityId);
+  try {
+    const already = await hasLiked(env.F1_DB, data.identityId);
 
-  if (already) {
-    await env.F1_DB.prepare('DELETE FROM site_likes WHERE identity_id = ?').bind(data.identityId).run();
-  } else {
-    // INSERT OR IGNORE: si por una race condition ya existiera la fila,
-    // no rompe ni duplica.
-    await env.F1_DB.prepare('INSERT OR IGNORE INTO site_likes (identity_id) VALUES (?)').bind(data.identityId).run();
+    if (already) {
+      await env.F1_DB.prepare('DELETE FROM site_likes WHERE identity_id = ?').bind(data.identityId).run();
+    } else {
+      // INSERT OR IGNORE: si por una race condition ya existiera la fila,
+      // no rompe ni duplica.
+      await env.F1_DB.prepare('INSERT OR IGNORE INTO site_likes (identity_id) VALUES (?)').bind(data.identityId).run();
+    }
+
+    const total = await countLikes(env.F1_DB);
+    return json({ total, likedByYou: !already });
+  } catch {
+    return json({ error: 'server_error' }, 500);
   }
-
-  const total = await countLikes(env.F1_DB);
-  return json({ total, likedByYou: !already });
 }
 
 async function countLikes(db) {
@@ -59,8 +63,7 @@ async function hasLiked(db, identityId) {
 }
 
 function notConfigured() {
-  return json({ total: 0, likedByYou: false, configured: false,
-    note: 'F1_DB (D1) todavía no está bindeado en este entorno.' });
+  return json({ total: 0, likedByYou: false, configured: false });
 }
 
 function json(obj, status = 200) {
