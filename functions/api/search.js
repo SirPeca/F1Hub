@@ -65,35 +65,41 @@ async function getCachedList(env, key, baseUrl, extractItems) {
   return items;
 }
 
-/** Pagina de verdad: sigue pidiendo offset += 100 hasta juntar MRData.total.
- * Devuelve `complete: true` solo si de verdad se llegó al total declarado. */
+/** Pagina de verdad, pero rápido: la única espera secuencial es la
+ * primera página (necesaria para saber `total`); el resto de las
+ * páginas se piden TODAS EN PARALELO. Antes esto era 9 pedidos uno
+ * detrás del otro (con reintentos posibles en cada uno) — la primera
+ * vez que alguien buscaba después de que la caché de 24h expirara,
+ * podía tardar varios segundos y sentirse "colgado". Ahora es 1 pedido
+ * + 1 tanda paralela, sin perder la resiliencia ante fallos parciales. */
 async function fetchAllPages(env, baseUrl, extractItems, staleKeyPrefix) {
-  let offset = 0;
-  let total = Infinity;
-  const all = [];
+  const firstUrl = `${baseUrl}?limit=${PAGE_LIMIT}&offset=0`;
+  const firstResult = await fetchResilient(firstUrl, {
+    fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null,
+    staleKey: `${staleKeyPrefix}:0`, retries: 3,
+  });
+  if (!firstResult.ok) return { items: [], complete: false };
 
-  while (offset < total) {
-    const url = `${baseUrl}?limit=${PAGE_LIMIT}&offset=${offset}`;
-    const result = await fetchResilient(url, {
-      fetchOptions: { headers: jolpicaHeaders() },
-      kv: env.F1_KV ?? null,
-      staleKey: `${staleKeyPrefix}:${offset}`,
-      retries: 3, // esta lista se cachea 24h, vale la pena insistir un poco más que el default
-    });
-
-    if (!result.ok) return { items: all, complete: false };
-
-    const declaredTotal = Number(result.data?.MRData?.total);
-    total = Number.isFinite(declaredTotal) ? declaredTotal : all.length;
-
-    const pageItems = extractItems(result.data);
-    if (!pageItems.length) break;
-
-    all.push(...pageItems);
-    offset += PAGE_LIMIT;
+  const declaredTotal = Number(firstResult.data?.MRData?.total);
+  const firstPageItems = extractItems(firstResult.data);
+  if (!Number.isFinite(declaredTotal) || !firstPageItems.length) {
+    return { items: firstPageItems, complete: true }; // respuesta rara pero no vacía: nos quedamos con lo que hay
   }
 
-  return { items: all, complete: true };
+  const remainingOffsets = [];
+  for (let offset = PAGE_LIMIT; offset < declaredTotal; offset += PAGE_LIMIT) remainingOffsets.push(offset);
+
+  const restResults = await Promise.all(remainingOffsets.map((offset) =>
+    fetchResilient(`${baseUrl}?limit=${PAGE_LIMIT}&offset=${offset}`, {
+      fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null,
+      staleKey: `${staleKeyPrefix}:${offset}`, retries: 3,
+    })
+  ));
+
+  const allComplete = restResults.every((r) => r.ok);
+  const restItems = restResults.filter((r) => r.ok).flatMap((r) => extractItems(r.data));
+
+  return { items: [...firstPageItems, ...restItems], complete: allComplete };
 }
 
 // ---------- ranking de relevancia ----------

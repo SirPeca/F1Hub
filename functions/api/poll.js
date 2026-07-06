@@ -122,13 +122,10 @@ async function resolveTargetRace(env) {
     if (raceTime > now - 3 * 60 * 60 * 1000) {
       const sessionType = r.Sprint ? 'sprint' : 'race';
       const closeSession = r.Sprint ? r.Sprint : { date: r.date, time: r.time };
-      // Pediste que esté abierta desde bastante antes, no recién cuando
-      // arranca el finde de sesiones (que puede ser 2-3 días antes nomás).
-      // Como resolveTargetRace() ya garantiza que esta es la próxima
-      // carrera real, la abrimos directamente al resolverla — no hace
-      // falta un "gate" extra de fecha de apertura.
       const opensAt = new Date().toISOString();
-      const closesAt = new Date(closeSession.time ? `${closeSession.date}T${closeSession.time}` : `${closeSession.date}T00:00:00Z`).toISOString();
+      const rawCloseTime = new Date(closeSession.time ? `${closeSession.date}T${closeSession.time}` : `${closeSession.date}T00:00:00Z`).getTime();
+      // Pediste que cierre 30 min ANTES del arranque, no justo cuando larga.
+      const closesAt = new Date(rawCloseTime - 30 * 60 * 1000).toISOString();
       return { season: r.season, round: Number(r.round), raceName: r.raceName, sessionType, opensAt, closesAt };
     }
   }
@@ -140,14 +137,13 @@ async function ensurePoll(db, target) {
     'INSERT OR IGNORE INTO gp_polls (season, round, session_type, opens_at, closes_at) VALUES (?, ?, ?, ?, ?)'
   ).bind(target.season, target.round, target.sessionType, target.opensAt, target.closesAt).run();
 
-  // Auto-corrección: si esta encuesta ya existía de antes con un
-  // opens_at más restrictivo (por ejemplo, de antes de este cambio, que
-  // recién la abría en el finde de sesiones), la adelantamos a ahora en
-  // vez de esperar a que expire sola. MIN() evita moverla para atrás si
-  // por algún motivo ya estaba más abierta todavía.
+  // Auto-corrección: adelanta tanto la apertura como el cierre si la
+  // encuesta ya existía de antes con valores más permisivos/tardíos que
+  // los que calculamos ahora (por ejemplo, de antes de este cambio, que
+  // cerraba justo cuando largaba la carrera en vez de 30 min antes).
   await db.prepare(
-    'UPDATE gp_polls SET opens_at = MIN(opens_at, ?) WHERE season = ? AND round = ? AND session_type = ?'
-  ).bind(target.opensAt, target.season, target.round, target.sessionType).run();
+    'UPDATE gp_polls SET opens_at = MIN(opens_at, ?), closes_at = MIN(closes_at, ?) WHERE season = ? AND round = ? AND session_type = ?'
+  ).bind(target.opensAt, target.closesAt, target.season, target.round, target.sessionType).run();
 
   return db.prepare(
     'SELECT * FROM gp_polls WHERE season = ? AND round = ? AND session_type = ?'
