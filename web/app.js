@@ -155,6 +155,7 @@ function setupTabs() {
       case 'vote-poll': votePoll(Number(d.pollId), d.driverId); break;
       case 'rerun-compare': runCompare(); break;
       case 'toggle-poll': togglePoll(); break;
+      case 'reload-favorites': loadFavorites(); break;
     }
   });
 
@@ -784,30 +785,41 @@ async function loadFavorites() {
       const items = favs.filter((f) => f.kind === kind);
       if (!items.length) return '';
       return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
-        <div class="favorite-row favorite-row-rich" data-fav-kind="${esc(f.kind)}" data-fav-id="${esc(f.refId)}">
-          <div class="favorite-row-top">
-            <span>${esc(f.label)}</span>
-            <button class="favorite-star is-fav" data-action="remove-favorite-row" data-kind="${esc(f.kind)}" data-ref-id="${esc(f.refId)}" data-label="${esc(f.label)}">★</button>
+        <div class="favorite-card" data-fav-kind="${esc(f.kind)}" data-fav-id="${esc(f.refId)}">
+          <div class="favorite-card-photo" id="fav-photo-${esc(f.refId)}">🏎️</div>
+          <div class="favorite-card-body">
+            <div class="favorite-card-top">
+              <span class="favorite-card-name">${esc(f.label)}</span>
+              <button class="favorite-star is-fav" data-action="remove-favorite-row" data-kind="${esc(f.kind)}" data-ref-id="${esc(f.refId)}" data-label="${esc(f.label)}">★</button>
+            </div>
+            ${f.kind === 'driver' ? `<div class="favorite-stats" id="fav-stats-${esc(f.refId)}">Cargando estadísticas…</div>` : ''}
           </div>
-          ${f.kind === 'driver' ? `<div class="favorite-stats" id="fav-stats-${esc(f.refId)}">Cargando estadísticas…</div>` : ''}
         </div>
       `).join('');
     }).join('');
 
-    // Estadísticas reales por piloto favorito (en paralelo, no bloquea el render de la lista)
+    // Foto + estadísticas reales por piloto favorito (en paralelo, no bloquea el render de la lista)
     favs.filter((f) => f.kind === 'driver').forEach(async (f) => {
       const statsEl = document.getElementById(`fav-stats-${f.refId}`);
+      const photoEl = document.getElementById(`fav-photo-${f.refId}`);
+
+      fetchJSON(`/api/media?q=${encodeURIComponent(f.label)}`).then((m) => {
+        if (photoEl && m.found) photoEl.innerHTML = `<img src="${m.thumbnailUrl}" alt="${esc(f.label)}" loading="lazy">`;
+      }).catch(() => {});
+
       if (!statsEl) return;
       try {
         const s = await fetchJSON(`/api/driver-summary?id=${encodeURIComponent(f.refId)}`);
-        statsEl.innerHTML = `
-          <span>🏆 ${s.wins} victorias</span>
-          <span>🥇 ${s.podiums} podios</span>
-          <span>⏱️ ${s.poles} poles</span>
-          ${s.nationality ? `<span>🌍 ${esc(s.nationality)}</span>` : ''}
-        `;
+        statsEl.innerHTML = s.error
+          ? `<span class="favorite-stats-error">No pudimos traer las estadísticas ahora — <button class="retry-btn-inline" data-action="reload-favorites">reintentar</button></span>`
+          : `
+            <span>🏆 ${s.wins} victorias</span>
+            <span>🥇 ${s.podiums} podios</span>
+            <span>⏱️ ${s.poles} poles</span>
+            ${s.nationality ? `<span>🌍 ${esc(s.nationality)}</span>` : ''}
+          `;
       } catch {
-        statsEl.textContent = 'No se pudieron cargar las estadísticas.';
+        statsEl.innerHTML = `<span class="favorite-stats-error">No pudimos traer las estadísticas ahora — <button class="retry-btn-inline" data-action="reload-favorites">reintentar</button></span>`;
       }
     });
   } catch {

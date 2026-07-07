@@ -1,38 +1,33 @@
 // =========================================
-// F1 Hub — functions/api/compare.js  (Fase C)  v2
+// F1 Hub — functions/api/compare.js  (Fase C)  v3
 //
 // GET /api/compare?a=hamilton&b=verstappen
 //
-// Truco de eficiencia: Ergast/Jolpica devuelve en `MRData.total` el
-// conteo TOTAL de resultados que matchean el filtro, sin importar el
-// `limit` pedido. Pedimos limit=1 en cada consulta (payload mínimo) y
-// leemos ese total — así conseguimos "cantidad de victorias" o
-// "cantidad de poles" de un piloto con una sola llamada liviana en vez
-// de traer y contar cientos de resultados.
+// v3 — dos bugs reales corregidos, confirmados con evidencia (Vettel
+// mostrando 0 victorias/podios/poles siendo un 4 veces campeón):
 //
-// v2 — reduce la ráfaga de pedidos: la v1 disparaba 12 requests
-// simultáneos a Jolpica (6 por piloto × 2 pilotos), lo cual es
-// suficiente para chocar contra su rate limit compartido (200-500/hora
-// entre TODOS los usuarios de Cloudflare) justo en el peor momento —
-// eso es lo que probablemente causaba comparaciones que volvían
-// completamente vacías. Ahora los dos pilotos se piden en secuencia
-// (máximo 6 simultáneos, no 12), y si de verdad fallan casi todos los
-// datos de un piloto, se devuelve `error` explícito en vez de ceros
-// silenciosos que parecen un bug.
+// 1) LA DETECCIÓN DE ERROR ERA DEMASIADO ESTRECHA. Solo marcaba "falló"
+//    si el perfil Y las victorias Y las poles fallaban los tres a la
+//    vez. Pero el perfil (nombre, foto) es una consulta liviana que
+//    casi nunca falla, mientras que victorias/podios/poles pueden
+//    fallar de forma independiente por un hipo transitorio de Jolpica
+//    — y `wins ?? 0` convertía ese fallo en un cero silencioso,
+//    indistinguible de "de verdad tiene cero". Ahora CUALQUIER
+//    estadística que falle marca error explícito, no se disfraza de 0.
 //
-// Importante: "campeonatos ganados" NO se calcula en esta request —
-// recorrer standings de cada temporada de la carrera del piloto sería
-// 30+ llamadas a Jolpica por consulta, rompiendo su rate limit. En vez
-// de eso, lo precalcula una vez por día `cron-worker/` (Worker aparte
-// con Cron Trigger, ver ese README) y lo deja en KV bajo la clave
-// `precomputed:championships`. Si ese Worker todavía no está
-// desplegado, esta función devuelve `championships: null` en vez de
-// inventar un número.
+// 2) VELOCIDAD: se cachea el resultado completo de cada piloto por
+//    separado (1 hora) en el edge cache de Cloudflare. La primera vez
+//    que alguien compara a Verstappen paga el costo completo (~5
+//    pedidos a Jolpica); la próxima persona que lo compare — con
+//    cualquier otro piloto — lo recibe instantáneo desde caché. Como
+//    la myoría de las comparaciones repiten pilotos populares, esto
+//    hace que el caso común se sienta inmediato.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
 
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
+const DRIVER_CACHE_TTL = 3600; // 1h — las estadísticas de carrera no cambian más que una vez por finde de carrera
 
 export async function onRequestGet(context) {
   const { env } = context;
@@ -41,12 +36,31 @@ export async function onRequestGet(context) {
   const b = url.searchParams.get('b');
   if (!a || !b) return json({ error: 'missing_drivers' }, 400);
 
-  // Secuencial, no Promise.all de los dos pilotos juntos: reduce el
-  // pico de requests simultáneos a Jolpica a la mitad (6 en vez de 12).
-  const statsA = await driverStats(env, a);
-  const statsB = await driverStats(env, b);
+  // Con el caché por piloto ya absorbiendo la carga repetida, volvemos
+  // a pedir los dos pilotos en paralelo (más rápido en el caso frío).
+  const [statsA, statsB] = await Promise.all([
+    getCachedDriverStats(env, a),
+    getCachedDriverStats(env, b),
+  ]);
 
   return json({ a: statsA, b: statsB });
+}
+
+async function getCachedDriverStats(env, driverId) {
+  const cache = caches.default;
+  const cacheReq = new Request(`https://internal.f1hub/cache/driver-stats/${driverId}/v3`);
+  const cached = await cache.match(cacheReq);
+  if (cached) return cached.json();
+
+  const stats = await driverStats(env, driverId);
+
+  // Solo cacheamos resultados SIN error — un fallo transitorio no debe
+  // quedar pegado por una hora, tiene que poder reintentarse ya mismo.
+  if (!stats.error) {
+    const res = new Response(JSON.stringify(stats), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DRIVER_CACHE_TTL}` } });
+    cache.put(cacheReq, res.clone());
+  }
+  return stats;
 }
 
 async function driverStats(env, driverId) {
@@ -61,28 +75,29 @@ async function driverStats(env, driverId) {
     getPrecomputedChampionships(kv, driverId),
   ]);
 
+  // CUALQUIERA de las cuatro estadísticas núcleo en null (no "0", sino
+  // NULL = la consulta falló) dispara el estado de error — ya no hace
+  // falta que fallen todas juntas. Esto es lo que atrapa el caso Vettel.
+  const coreStats = { wins, p2, p3, poles };
+  const failedFields = Object.entries(coreStats).filter(([, v]) => v === null).map(([k]) => k);
+  const hasError = failedFields.length > 0;
+
   const wins_ = wins ?? 0, p2_ = p2 ?? 0, p3_ = p3 ?? 0;
 
-  // Si de verdad no conseguimos el nombre bonito (ni al reintentar),
-  // mostramos el ID formateado ("max_verstappen" -> "Max Verstappen")
-  // en vez del ID crudo en minúscula — nunca se ve "es un bug" aunque
-  // técnicamente sea un dato de respaldo.
   const displayName = profile
     ? `${profile.givenName} ${profile.familyName}`
     : driverId.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-
-  const looksLikeTotalFailure = !profile && wins === null && poles === null;
 
   return {
     driverId,
     name: displayName,
     nationality: profile?.nationality ?? null,
-    wins: wins_,
-    podiums: wins_ + p2_ + p3_,
-    poles: poles ?? 0,
+    wins: hasError ? null : wins_,
+    podiums: hasError ? null : wins_ + p2_ + p3_,
+    poles: hasError ? null : (poles ?? 0),
     seasons: seasons ?? null,
     championships,
-    error: looksLikeTotalFailure ? 'upstream_unavailable' : null,
+    error: hasError ? 'upstream_unavailable' : null,
   };
 }
 
@@ -117,7 +132,11 @@ async function getPrecomputedChampionships(kv, driverId) {
 }
 
 async function total(url, kv, staleKey) {
-  const result = await fetchResilient(url, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey });
+  // 3 reintentos (en vez de los 2 por defecto) para las estadísticas
+  // núcleo del comparador — acá la exactitud pesa más que la latencia
+  // de un reintento extra, sobre todo ahora que el resultado se cachea
+  // por 1h y ese costo se paga una sola vez por piloto.
+  const result = await fetchResilient(url, { fetchOptions: { headers: jolpicaHeaders() }, kv, staleKey, retries: 3 });
   if (!result.ok) return null;
   const n = Number(result.data?.MRData?.total);
   return Number.isFinite(n) ? n : null;

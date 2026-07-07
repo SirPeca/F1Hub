@@ -126,11 +126,16 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{ou
 .favorite-star.is-fav{opacity:1}
 .favorites-group-title{font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.6px;margin:16px 0 8px}
 .favorites-group-title:first-child{margin-top:0}
-.favorite-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg1);border-radius:8px;margin-bottom:6px;border:1px solid var(--bord-soft)}
-.favorite-row-rich{display:block}
-.favorite-row-top{display:flex;justify-content:space-between;align-items:center}
-.favorite-stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--bord-soft);font-size:11px;color:var(--sub);font-family:var(--mono)}
 .favorites-hint{font-size:11px;color:var(--dim);text-align:center;margin-top:16px;line-height:1.6}
+
+.favorite-card{display:flex;gap:14px;padding:14px;background:linear-gradient(135deg,var(--bg1),var(--bg2));border-radius:var(--radius);margin-bottom:10px;border:1px solid var(--bord);box-shadow:0 4px 16px rgba(0,0,0,.25)}
+.favorite-card-photo{width:56px;height:56px;border-radius:12px;background:var(--bg0);border:1px solid var(--bord);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden}
+.favorite-card-photo img{width:100%;height:100%;object-fit:cover}
+.favorite-card-body{flex:1;min-width:0}
+.favorite-card-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.favorite-card-name{font-size:14.5px;font-weight:700}
+.favorite-stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--bord-soft);font-size:11px;color:var(--sub);font-family:var(--mono)}
+.favorite-stats-error{color:var(--dim);font-family:var(--disp)}
 
 /* =========================================
    ENCUESTA DEL GP
