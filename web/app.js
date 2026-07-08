@@ -152,7 +152,7 @@ function setupTabs() {
         break;
       case 'select-compare-driver': selectCompareDriver(d.side, d.id, d.label); break;
       case 'search-result-click': onSearchResultClick(d.type, d.id); break;
-      case 'vote-poll': votePoll(Number(d.pollId), d.driverId); break;
+      case 'vote-poll': votePoll(Number(d.pollId), d.driverId, d.driverName); break;
       case 'rerun-compare': runCompare(); break;
       case 'toggle-poll': togglePoll(); break;
       case 'reload-favorites': loadFavorites(); break;
@@ -767,6 +767,20 @@ function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('visible'), 4000);
 }
 
+/** Corre `fn` sobre `items`, pero nunca más de `limit` a la vez —
+ * evita que una lista larga (ej: muchos favoritos) dispare una ráfaga
+ * de pedidos que choque contra el rate limit del proveedor de datos. */
+async function runWithConcurrencyLimit(items, limit, fn) {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      await fn(item).catch(() => {});
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function loadFavorites() {
   const el = document.getElementById('favorites-list');
   if (!state.config.likesAndVotesAndFavorites) {
@@ -787,7 +801,7 @@ async function loadFavorites() {
       if (!items.length) return '';
       return `<div class="favorites-group-title">${title}</div>` + items.map((f) => `
         <div class="favorite-card" data-fav-kind="${esc(f.kind)}" data-fav-id="${esc(f.refId)}">
-          <div class="favorite-card-photo" id="fav-photo-${esc(f.refId)}">🏎️</div>
+          <div class="favorite-card-photo" id="fav-photo-${esc(f.refId)}">${f.kind === 'driver' ? esc(initialsOf(f.label)) : '🏁'}</div>
           <div class="favorite-card-body">
             <div class="favorite-card-top">
               <span class="favorite-card-name">${esc(f.label)}</span>
@@ -799,12 +813,17 @@ async function loadFavorites() {
       `).join('');
     }).join('');
 
-    // Foto + estadísticas reales por piloto favorito (en paralelo, no bloquea el render de la lista)
-    favs.filter((f) => f.kind === 'driver').forEach(async (f) => {
+    // Foto + estadísticas reales por piloto favorito — CON CONCURRENCIA
+    // LIMITADA (2 a la vez). Antes disparaba todo en paralelo: con 5
+    // favoritos eso son ~20 pedidos simultáneos a Jolpica, suficiente
+    // para chocar contra su rate limit compartido y mostrar "reintentar"
+    // en pilotos al azar (como viste con Verstappen).
+    const driverFavs = favs.filter((f) => f.kind === 'driver');
+    await runWithConcurrencyLimit(driverFavs, 2, async (f) => {
       const statsEl = document.getElementById(`fav-stats-${f.refId}`);
       const photoEl = document.getElementById(`fav-photo-${f.refId}`);
 
-      fetchJSON(`/api/media?q=${encodeURIComponent(f.label)}`).then((m) => {
+      await fetchJSON(`/api/media?q=${encodeURIComponent(f.label)}`).then((m) => {
         if (photoEl && m.found) photoEl.innerHTML = `<img src="${m.thumbnailUrl}" alt="${esc(f.label)}" loading="lazy">`;
       }).catch(() => {});
 
@@ -881,6 +900,10 @@ function selectCompareDriver(side, id, label) {
   if (bothSelected) runCompare(); // auto-comparar como atajo; el botón queda para volver a correrla a mano
 }
 
+function initialsOf(name) {
+  return String(name || '?').trim().split(' ').map((w) => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+}
+
 async function runCompare() {
   if (!compareSelection.a || !compareSelection.b) {
     toast('Elegí un piloto en cada campo antes de comparar.');
@@ -905,8 +928,14 @@ async function runCompare() {
     ];
     el.innerHTML = `
       <div class="compare-header">
-        <span class="ch-name">${mediaA.found ? `<img class="ch-photo" loading="lazy" src="${mediaA.thumbnailUrl}" alt="${esc(data.a.name)}">` : ''}${esc(data.a.name)}</span>
-        <span class="ch-name">${esc(data.b.name)}${mediaB.found ? `<img class="ch-photo" loading="lazy" src="${mediaB.thumbnailUrl}" alt="${esc(data.b.name)}">` : ''}</span>
+        <div class="ch-side">
+          <div class="ch-photo-wrap">${mediaA.found ? `<img class="ch-photo" loading="lazy" src="${mediaA.thumbnailUrl}" alt="${esc(data.a.name)}">` : `<div class="ch-photo ch-photo-fallback">${esc(initialsOf(data.a.name))}</div>`}</div>
+          <span class="ch-name">${esc(data.a.name)}</span>
+        </div>
+        <div class="ch-side">
+          <div class="ch-photo-wrap">${mediaB.found ? `<img class="ch-photo" loading="lazy" src="${mediaB.thumbnailUrl}" alt="${esc(data.b.name)}">` : `<div class="ch-photo ch-photo-fallback">${esc(initialsOf(data.b.name))}</div>`}</div>
+          <span class="ch-name">${esc(data.b.name)}</span>
+        </div>
       </div>
       ${rows.map(([key, label]) => {
         const av = data.a[key] ?? '—', bv = data.b[key] ?? '—';
@@ -918,7 +947,7 @@ async function runCompare() {
           <div class="compare-stat-val ${bWin ? 'win' : ''}" style="text-align:right">${bv}</div>
         </div>`;
       }).join('')}
-      <p class="favorites-hint">${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
+      <p class="favorites-hint">${(data.a.stale || data.b.stale) ? '⚠️ Mostrando el último dato guardado para algún piloto (el proveedor está lento ahora mismo). ' : ''}${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
     `;
   } catch {
     el.innerHTML = `<div class="live-empty">No se pudo comparar en este momento. <button class="retry-btn-inline" data-action="rerun-compare">Reintentar</button></div>`;
@@ -1297,8 +1326,8 @@ function renderPoll(poll) {
     const yourVoteOption = poll.options.find((o) => o.driverId === poll.yourVote);
     el.innerHTML = `<div class="poll-card poll-open poll-collapsed">
       <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
-      <div class="poll-title">¡Gracias! Tu pronóstico ya quedó cargado 🏁</div>
-      <div class="poll-meta-row"><span>Votaste: <b>${esc(yourVoteOption?.name ?? '')}</b></span><span id="poll-countdown">cierra en —</span></div>
+      <div class="poll-title">Votaste por ${esc(yourVoteOption?.name ?? '')} 🏁</div>
+      <div class="poll-meta-row"><span>Podés cambiar tu voto mientras la encuesta siga abierta</span><span id="poll-countdown">cierra en —</span></div>
       <button class="retry-btn-inline" data-action="toggle-poll">Ver / cambiar mi voto</button>
     </div>`;
     startPollCountdown(new Date(poll.closesAt));
@@ -1344,7 +1373,7 @@ function renderPoll(poll) {
     ${poll.options.map((o) => `
       <div class="poll-option ${poll.yourVote === o.driverId ? 'selected' : ''}">
         <div class="poll-option-fill" style="width:${o.percentage}%"></div>
-        <button data-action="vote-poll" data-poll-id="${poll.id}" data-driver-id="${esc(o.driverId)}">
+        <button data-action="vote-poll" data-poll-id="${poll.id}" data-driver-id="${esc(o.driverId)}" data-driver-name="${esc(o.name)}">
           <div class="poll-option-row"><span>${poll.yourVote === o.driverId ? '✓ ' : ''}${o.name}</span><span>${o.percentage}% (${o.votes})</span></div>
         </button>
       </div>
@@ -1375,7 +1404,7 @@ function startPollCountdown(target) {
   state.pollCountdownTimer = setInterval(tick, 30000);
 }
 
-async function votePoll(pollId, driverId) {
+async function votePoll(pollId, driverId, driverName) {
   const { ok, networkError, serverError, data } = await safeRequest('/api/poll', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pollId, driverId }),
@@ -1388,7 +1417,7 @@ async function votePoll(pollId, driverId) {
     toast(data?.error === 'poll_closed' ? 'La votación ya cerró para este Gran Premio.' : 'No se pudo registrar tu voto. Probá de nuevo.');
     return;
   }
-  toast('¡Voto registrado! 🏁');
+  toast(`Votaste por ${driverName || 'tu piloto'} — podés cambiarlo mientras la encuesta siga abierta 🏁`);
   state.pollExpanded = false;
   loadPoll();
 }

@@ -28,6 +28,7 @@ import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
 
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
 const DRIVER_CACHE_TTL = 3600; // 1h — las estadísticas de carrera no cambian más que una vez por finde de carrera
+const FALLBACK_KV_TTL = 60 * 60 * 24 * 7; // 7 días — respaldo de largo plazo ante fallos transitorios
 
 export async function onRequestGet(context) {
   const { env } = context;
@@ -53,12 +54,26 @@ async function getCachedDriverStats(env, driverId) {
   if (cached) return cached.json();
 
   const stats = await driverStats(env, driverId);
+  const kv = env.F1_KV ?? null;
 
-  // Solo cacheamos resultados SIN error — un fallo transitorio no debe
-  // quedar pegado por una hora, tiene que poder reintentarse ya mismo.
   if (!stats.error) {
+    // Resultado sano: lo guardamos en el caché de 1h (rápido) Y en KV
+    // por 7 días (respaldo de largo plazo si Jolpica tiene un mal día).
     const res = new Response(JSON.stringify(stats), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DRIVER_CACHE_TTL}` } });
     cache.put(cacheReq, res.clone());
+    if (kv) kv.put(`stale:cmp:fullstats:${driverId}`, JSON.stringify(stats), { expirationTtl: FALLBACK_KV_TTL }).catch(() => {});
+    return stats;
+  }
+
+  // El cálculo fresco falló — antes de rendirnos y mostrar "error",
+  // fijamos si tenemos un resultado bueno de este piloto de hasta 7
+  // días atrás. Un piloto que ya comparamos antes con éxito no debería
+  // mostrar error solo porque Jolpica tuvo un hipo justo ahora.
+  if (kv) {
+    try {
+      const raw = await kv.get(`stale:cmp:fullstats:${driverId}`);
+      if (raw) return { ...JSON.parse(raw), stale: true };
+    } catch { /* si también falla KV, seguimos al error normal */ }
   }
   return stats;
 }

@@ -1,23 +1,16 @@
 // =========================================
-// F1 Hub — functions/api/search.js  (Fase C)  v3
+// F1 Hub — functions/api/search.js  (Fase C)  v4
 //
 // GET /api/search?q=hamilton
 //
-// Dos bugs corregidos en esta versión (ambos confirmados con evidencia
-// real, no solo teoría):
-//
-// 1) Un fallo transitorio en CUALQUIER página de la paginación cortaba
-//    la lista a la mitad, y esa lista INCOMPLETA se guardaba igual en
-//    caché por 24h (el chequeo era "¿tiene algo?" en vez de "¿está
-//    completa?"). Ahora solo se cachea si se llegó a juntar el total
-//    declarado por la propia API.
-//
-// 2) No había ranking de relevancia: "Ver" encontraba a "Oliver
-//    Bearman" o "Paddy DRIVER" (contienen "ver" en el medio) antes que
-//    a "Max VERstappen" (empieza con "Ver"), simplemente porque
-//    aparecían antes en la lista sin ordenar y el corte a 8 resultados
-//    los tapaba. Ahora se puntúa cada coincidencia (nombre exacto >
-//    empieza con > contiene) y se ordena antes de cortar.
+// v4 — bug de priorización confirmado con evidencia ("Ha" traía a un
+// piloto histórico poco conocido antes que a Hamilton): cuando dos
+// coincidencias empataban en score (ambas "empiezan con"), el
+// desempate era ALFABÉTICO — un apellido poco conocido que empieza
+// antes en el abecedario le ganaba a Hamilton sin importar relevancia.
+// Ahora los pilotos de la GRILLA ACTUAL (temporada en curso) van
+// siempre primero, sea cual sea el orden alfabético — es lo que
+// cualquier persona busca en el 99% de los casos.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
@@ -31,17 +24,43 @@ export async function onRequestGet(context) {
   const q = (new URL(request.url).searchParams.get('q') || '').trim().toLowerCase();
   if (q.length < 2) return json({ drivers: [], constructors: [], circuits: [] });
 
-  const [drivers, constructors, circuits] = await Promise.all([
+  const [drivers, constructors, circuits, currentDriverIds] = await Promise.all([
     getCachedList(env, 'drivers', `${JOLPICA_BASE}/drivers.json`, (d) => d?.MRData?.DriverTable?.Drivers ?? []),
     getCachedList(env, 'constructors', `${JOLPICA_BASE}/constructors.json`, (d) => d?.MRData?.ConstructorTable?.Constructors ?? []),
     getCachedList(env, 'circuits', `${JOLPICA_BASE}/circuits.json`, (d) => d?.MRData?.CircuitTable?.Circuits ?? []),
+    getCurrentDriverIds(env),
   ]);
 
   return json({
-    drivers: rankAndFormat(drivers, q, driverMatchFields, driverToResult),
+    drivers: rankAndFormat(drivers, q, driverMatchFields, driverToResult, (d) => currentDriverIds.has(d.driverId)),
     constructors: rankAndFormat(constructors, q, (c) => [c.name], constructorToResult),
     circuits: rankAndFormat(circuits, q, (c) => [c.circuitName, c.Location?.locality, c.Location?.country], circuitToResult),
   });
+}
+
+/** Set de driverId de la temporada actual — se usa para priorizar el
+ * grid vigente por encima de homónimos históricos. Barato: es la misma
+ * lista de ~20 pilotos que ya se usa en Posiciones/Encuesta, cacheada
+ * 1h en el edge (no hace falta 24h, pero tampoco cambia tan seguido
+ * como para pedirla en cada búsqueda). */
+async function getCurrentDriverIds(env) {
+  const cache = caches.default;
+  const cacheReq = new Request('https://internal.f1hub/cache/list/current-driver-ids/v1');
+  const cached = await cache.match(cacheReq);
+  if (cached) return new Set(await cached.json());
+
+  const result = await fetchResilient(`${JOLPICA_BASE}/current/driverStandings.json`, {
+    fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null, staleKey: 'stale:search:current-drivers',
+  });
+  const ids = result.ok
+    ? (result.data?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings ?? []).map((d) => d.Driver?.driverId).filter(Boolean)
+    : [];
+
+  if (ids.length) {
+    const res = new Response(JSON.stringify(ids), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } });
+    cache.put(cacheReq, res.clone());
+  }
+  return new Set(ids);
 }
 
 async function getCachedList(env, key, baseUrl, extractItems) {
@@ -67,11 +86,7 @@ async function getCachedList(env, key, baseUrl, extractItems) {
 
 /** Pagina de verdad, pero rápido: la única espera secuencial es la
  * primera página (necesaria para saber `total`); el resto de las
- * páginas se piden TODAS EN PARALELO. Antes esto era 9 pedidos uno
- * detrás del otro (con reintentos posibles en cada uno) — la primera
- * vez que alguien buscaba después de que la caché de 24h expirara,
- * podía tardar varios segundos y sentirse "colgado". Ahora es 1 pedido
- * + 1 tanda paralela, sin perder la resiliencia ante fallos parciales. */
+ * páginas se piden TODAS EN PARALELO. */
 async function fetchAllPages(env, baseUrl, extractItems, staleKeyPrefix) {
   const firstUrl = `${baseUrl}?limit=${PAGE_LIMIT}&offset=0`;
   const firstResult = await fetchResilient(firstUrl, {
@@ -83,7 +98,7 @@ async function fetchAllPages(env, baseUrl, extractItems, staleKeyPrefix) {
   const declaredTotal = Number(firstResult.data?.MRData?.total);
   const firstPageItems = extractItems(firstResult.data);
   if (!Number.isFinite(declaredTotal) || !firstPageItems.length) {
-    return { items: firstPageItems, complete: true }; // respuesta rara pero no vacía: nos quedamos con lo que hay
+    return { items: firstPageItems, complete: true };
   }
 
   const remainingOffsets = [];
@@ -113,18 +128,19 @@ function matchScore(fields, q) {
     let score = null;
     if (field === q) score = 0;
     else if (field.startsWith(q)) score = 1;
-    else if (field.split(' ').some((word) => word.startsWith(q))) score = 1; // "ver" -> "Max Verstappen" (segunda palabra)
+    else if (field.split(' ').some((word) => word.startsWith(q))) score = 1;
     else if (field.includes(q)) score = 2;
     if (score !== null && (best === null || score < best)) best = score;
   }
   return best;
 }
 
-function rankAndFormat(list, q, getFields, toResult) {
+function rankAndFormat(list, q, getFields, toResult, isPriority = () => false) {
   return list
-    .map((item) => ({ item, score: matchScore(getFields(item), q) }))
+    .map((item) => ({ item, score: matchScore(getFields(item), q), priority: isPriority(item) ? 0 : 1 }))
     .filter((x) => x.score !== null)
-    .sort((a, b) => a.score - b.score || getFields(a.item)[0]?.localeCompare(getFields(b.item)[0]) || 0)
+    // Orden: 1) grid actual primero, 2) score de relevancia, 3) alfabético como último desempate.
+    .sort((a, b) => a.priority - b.priority || a.score - b.score || getFields(a.item)[0]?.localeCompare(getFields(b.item)[0]) || 0)
     .slice(0, 8)
     .map((x) => toResult(x.item));
 }
