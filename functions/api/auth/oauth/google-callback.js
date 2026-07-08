@@ -48,13 +48,13 @@ export async function onRequestGet(context) {
     await env.F1_DB.prepare('UPDATE identities SET user_id = ? WHERE id = ?').bind(userId, data.identityId).run();
   }
 
-  const { token } = await createSession(env.F1_DB, userId);
+  const { token, ttl } = await createSession(env.F1_DB, userId, true); // OAuth: sin checkbox, asumimos "recordarme"
 
   return new Response(null, {
     status: 302,
     headers: {
       Location: url.origin + '/',
-      'Set-Cookie': sessionCookieHeader(token),
+      'Set-Cookie': sessionCookieHeader(token, ttl),
     },
   });
 }

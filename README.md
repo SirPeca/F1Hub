@@ -84,6 +84,8 @@ npx wrangler d1 execute f1hub-db --file=migrations/0002_auth_extras.sql --remote
 npx wrangler d1 execute f1hub-db --file=migrations/0003_favorites_label.sql --remote
 npx wrangler d1 execute f1hub-db --file=migrations/0004_push_subscriptions.sql --remote
 npx wrangler d1 execute f1hub-db --file=migrations/0005_session_idle_timeout.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0006_poll_votes_require_account.sql --remote
+npx wrangler d1 execute f1hub-db --file=migrations/0007_session_remember.sql --remote
 ```
 
 ### 5) Cargar el secret de identidad (una sola vez)

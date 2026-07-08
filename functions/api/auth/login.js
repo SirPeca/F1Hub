@@ -21,9 +21,10 @@ export async function onRequestPost(context) {
 
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
+  const remember = Boolean(body.remember);
 
   const user = await env.F1_DB.prepare(
-    'SELECT id, email, password_hash, nickname, avatar_url, email_verified, is_admin FROM users WHERE email = ?'
+    'SELECT id, email, password_hash, nickname, avatar_url, email_verified, is_admin, created_at FROM users WHERE email = ?'
   ).bind(email).first();
 
   // Mismo mensaje de error exista o no el usuario, y verificación en
@@ -36,14 +37,14 @@ export async function onRequestPost(context) {
     await env.F1_DB.prepare('UPDATE identities SET user_id = ? WHERE id = ?').bind(user.id, data.identityId).run();
   }
 
-  const { token } = await createSession(env.F1_DB, user.id);
+  const { token, ttl } = await createSession(env.F1_DB, user.id, remember);
 
   return new Response(JSON.stringify({
     user: {
       id: user.id, email: user.email, nickname: user.nickname, avatarUrl: user.avatar_url,
-      emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin),
+      emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin), createdAt: user.created_at,
     },
-  }), { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookieHeader(token) } });
+  }), { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookieHeader(token, ttl) } });
 }
 
 function json(obj, status = 200) {

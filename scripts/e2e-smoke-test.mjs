@@ -144,12 +144,13 @@ if (config.accounts) {
       // poll puede ser null si no hay ningún GP próximo — no es un fallo
     });
 
-    await test('POST /api/poll vota si hay una encuesta abierta (no requiere cuenta)', async () => {
+    await test('POST /api/poll vota estando logueado', async () => {
       const r = await call('GET', '/api/poll');
       if (!r.data.poll || !r.data.poll.isOpen) {
         console.log('   ⚠️  (sin encuesta abierta ahora mismo, se omite el voto — no es un fallo)');
         return;
       }
+      assert(r.data.poll.requiresLogin === false, 'el poll dice requiresLogin:true estando logueado — no debería');
       const driverId = r.data.poll.options[0]?.driverId;
       assert(driverId, 'la encuesta está abierta pero no trae opciones de piloto');
       const vote = await call('POST', '/api/poll', { pollId: r.data.poll.id, driverId });
@@ -166,6 +167,16 @@ if (config.accounts) {
     const r = await call('GET', '/api/auth/me');
     assert(r.ok, `status ${r.status}`);
     assert(r.data.user === null, 'el logout no invalidó la sesión');
+  });
+
+  await test('POST /api/poll rechaza el voto sin sesión (integridad)', async () => {
+    const r = await call('GET', '/api/poll');
+    if (!r.data.poll) { console.log('   ⚠️  (sin encuesta activa, se omite)'); return; }
+    assert(r.data.poll.requiresLogin === true, 'sin sesión, el poll debería pedir login (requiresLogin:true)');
+    const driverId = r.data.poll.options[0]?.driverId;
+    if (!driverId) return;
+    const vote = await call('POST', '/api/poll', { pollId: r.data.poll.id, driverId });
+    assert(vote.status === 401 && vote.data?.error === 'login_required', `se esperaba 401 login_required, llegó status ${vote.status}`);
   });
 } else {
   console.log('⚠️  /api/config dice accounts:false — se omiten las pruebas de cuentas/favoritos/encuesta.');

@@ -156,6 +156,7 @@ function setupTabs() {
       case 'rerun-compare': runCompare(); break;
       case 'toggle-poll': togglePoll(); break;
       case 'reload-favorites': loadFavorites(); break;
+      case 'open-account': document.getElementById('account-overlay').hidden = false; renderAccountOverlay(); break;
     }
   });
 
@@ -1005,25 +1006,103 @@ async function setupAccount() {
   loadFavoriteKeys();
 }
 
+// Avatar sin necesitar subir/almacenar archivos: si viene de OAuth (Google/
+// GitHub) usamos esa foto real; si no, generamos un círculo con las
+// iniciales y un color estable según el nombre (mismo patrón que Slack/
+// Discord para cuentas sin foto — cero infraestructura nueva).
+function avatarHtml(u) {
+  if (u.avatarUrl) return `<img class="account-avatar" src="${u.avatarUrl}" alt="Avatar">`;
+  const label = u.nickname || u.email || '?';
+  const initials = label.trim().slice(0, 2).toUpperCase();
+  const hue = [...label].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+  return `<div class="account-avatar account-avatar-initials" style="background:hsl(${hue},55%,32%)">${esc(initials)}</div>`;
+}
+
 function renderAccountOverlay() {
   const titleEl = document.getElementById('account-title');
   const el = document.getElementById('account-content');
 
   if (state.currentUser) {
     titleEl.textContent = 'Mi cuenta';
+    const u = state.currentUser;
+    const memberSince = u.createdAt ? fmtDate(u.createdAt, { year: 'numeric' }) : null;
     el.innerHTML = `
       <div class="account-profile">
-        <div class="hero-title" style="font-size:16px">${esc(state.currentUser.nickname || state.currentUser.email)}</div>
-        <div class="hero-meta">${esc(state.currentUser.email)}</div>
-        ${state.currentUser.isAdmin ? '<p class="favorites-hint">Tenés permisos de administrador — <a href="/admin.html" style="color:var(--gold)">ir al panel</a>.</p>' : ''}
+        <div class="account-header-row">
+          ${avatarHtml(u)}
+          <div>
+            <div class="hero-title" style="font-size:16px">${esc(u.nickname || u.email)}</div>
+            <div class="hero-meta">${esc(u.email)}</div>
+          </div>
+        </div>
+        ${memberSince ? `<div class="account-info-line">Miembro desde ${memberSince}${u.emailVerified ? ' · Email verificado ✓' : ''}</div>` : ''}
+        ${u.isAdmin ? '<p class="favorites-hint">Tenés permisos de administrador — <a href="/admin.html" style="color:var(--gold)">ir al panel</a>.</p>' : ''}
+
+        <div class="account-section">
+          <label class="account-section-label">Nombre visible</label>
+          <div class="account-inline-form">
+            <input type="text" id="account-nickname-input" value="${esc(u.nickname || '')}" maxlength="40">
+            <button class="retry-btn-inline" id="save-nickname-btn">Guardar</button>
+          </div>
+          <div id="nickname-msg" class="auth-error"></div>
+        </div>
+
+        <button class="account-section-toggle" id="toggle-change-password">🔒 Cambiar contraseña</button>
+        <div class="account-section" id="change-password-section" hidden>
+          <input type="password" id="current-password-input" placeholder="Contraseña actual">
+          <input type="password" id="new-password-input" placeholder="Contraseña nueva (mín. 8 caracteres)" minlength="8" style="margin-top:8px">
+          <button class="retry-btn-inline" id="save-password-btn" style="margin-top:8px">Actualizar contraseña</button>
+          <div id="password-msg" class="auth-error"></div>
+        </div>
+
         <button class="retry-btn" style="width:100%;margin-top:16px" id="logout-btn">Cerrar sesión</button>
       </div>
     `;
+
     document.getElementById('logout-btn').addEventListener('click', async () => {
       await fetch('/api/auth/logout', { method: 'POST' });
       state.currentUser = null;
       document.getElementById('account-btn').classList.remove('is-logged');
       document.getElementById('account-overlay').hidden = true;
+      loadPoll();
+    });
+
+    document.getElementById('save-nickname-btn').addEventListener('click', async () => {
+      const nickname = document.getElementById('account-nickname-input').value.trim();
+      const msgEl = document.getElementById('nickname-msg');
+      const { ok, data } = await safeRequest('/api/auth/update-profile', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname }),
+      });
+      if (ok) {
+        state.currentUser.nickname = data.nickname;
+        msgEl.style.color = 'var(--sub)';
+        msgEl.textContent = 'Guardado ✓';
+        renderAccountOverlay();
+      } else {
+        msgEl.style.color = 'var(--red-hi)';
+        msgEl.textContent = 'No se pudo guardar. Probá con otro nombre.';
+      }
+    });
+
+    document.getElementById('toggle-change-password').addEventListener('click', () => {
+      const section = document.getElementById('change-password-section');
+      section.hidden = !section.hidden;
+    });
+
+    document.getElementById('save-password-btn').addEventListener('click', async () => {
+      const currentPassword = document.getElementById('current-password-input').value;
+      const newPassword = document.getElementById('new-password-input').value;
+      const msgEl = document.getElementById('password-msg');
+      const { ok, data } = await safeRequest('/api/auth/change-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      if (ok) {
+        msgEl.style.color = 'var(--sub)';
+        msgEl.textContent = 'Contraseña actualizada ✓ (se cerraron tus otras sesiones activas)';
+      } else {
+        msgEl.style.color = 'var(--red-hi)';
+        msgEl.textContent = data?.error === 'invalid_current_password' ? 'La contraseña actual no es correcta.' : 'No se pudo actualizar. Probá de nuevo.';
+      }
     });
     return;
   }
@@ -1039,6 +1118,7 @@ function renderAccountOverlay() {
       <input type="email" id="auth-email" placeholder="Email" required>
       <input type="password" id="auth-password" placeholder="Contraseña" minlength="8" required>
       <input type="text" id="auth-nickname" placeholder="Nombre (solo para registrarte)">
+      <label class="auth-remember-row"><input type="checkbox" id="auth-remember"> Recordarme en este dispositivo</label>
       <div id="auth-error" class="auth-error"></div>
       <button type="submit" class="retry-btn" style="width:100%">Ingresar</button>
       <button type="button" id="auth-register-btn" class="retry-btn-inline" style="width:100%;margin-top:8px;text-align:center">Crear cuenta nueva</button>
@@ -1133,12 +1213,13 @@ async function submitAuth(endpoint) {
   const email = document.getElementById('auth-email').value;
   const password = document.getElementById('auth-password').value;
   const nickname = document.getElementById('auth-nickname').value;
+  const remember = document.getElementById('auth-remember')?.checked ?? false;
   const errorEl = document.getElementById('auth-error');
   errorEl.textContent = '';
 
   const { ok, networkError, serverError, data } = await safeRequest(endpoint, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, nickname }),
+    body: JSON.stringify({ email, password, nickname, remember }),
   });
 
   if (networkError) { errorEl.textContent = 'No hay conexión. Revisá tu internet y probá de nuevo.'; return; }
@@ -1149,6 +1230,7 @@ async function submitAuth(endpoint) {
   document.getElementById('account-btn').classList.add('is-logged');
   renderAccountOverlay();
   loadFavoriteKeys();
+  loadPoll();
   toast(endpoint.includes('register') ? '¡Cuenta creada! Ya iniciaste sesión.' : `¡Hola, ${data.user.nickname || data.user.email}!`);
 }
 
@@ -1231,7 +1313,22 @@ function renderPoll(poll) {
         <span>👥 ${poll.totalVotes} ${poll.totalVotes === 1 ? 'voto' : 'votos'}</span>
         <span id="poll-countdown">cierra en —</span>
       </div>
-      <button class="compare-run-btn" data-action="toggle-poll">Votar ahora</button>
+      <button class="compare-run-btn" data-action="${poll.requiresLogin ? 'open-account' : 'toggle-poll'}">${poll.requiresLogin ? 'Iniciá sesión para votar' : 'Votar ahora'}</button>
+    </div>`;
+    startPollCountdown(new Date(poll.closesAt));
+    return;
+  }
+
+  if (poll.requiresLogin) {
+    el.innerHTML = `<div class="poll-card poll-open">
+      <div class="poll-eyebrow pulsing"><span class="dot"></span>ENCUESTA DE LA COMUNIDAD</div>
+      <div class="poll-title">${question}</div>
+      <div class="poll-meta-row">
+        <span>👥 ${poll.totalVotes} ${poll.totalVotes === 1 ? 'voto' : 'votos'}</span>
+        <span id="poll-countdown">cierra en —</span>
+      </div>
+      <p class="poll-footer-note">Para que cada voto valga lo mismo (una persona = un voto), necesitás una cuenta para participar.</p>
+      <button class="compare-run-btn" data-action="open-account">Iniciar sesión / crear cuenta</button>
     </div>`;
     startPollCountdown(new Date(poll.closesAt));
     return;
@@ -1287,6 +1384,7 @@ async function votePoll(pollId, driverId) {
   if (networkError) { toast('No hay conexión. Revisá tu internet.'); return; }
   if (serverError) { toast('El servidor tuvo un problema. Probá de nuevo.'); return; }
   if (!ok) {
+    if (data?.error === 'login_required') { toast('Necesitás iniciar sesión para votar.'); loadPoll(); return; }
     toast(data?.error === 'poll_closed' ? 'La votación ya cerró para este Gran Premio.' : 'No se pudo registrar tu voto. Probá de nuevo.');
     return;
   }

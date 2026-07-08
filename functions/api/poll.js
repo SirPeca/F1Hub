@@ -1,29 +1,35 @@
 // =========================================
-// F1 Hub — functions/api/poll.js  (Fase A)
+// F1 Hub — functions/api/poll.js  (Fase A)  v2 — voto requiere cuenta
 //
-// GET  /api/poll  -> devuelve la encuesta activa (o la próxima a abrir)
-//                     con opciones, porcentajes, total de votos y si
-//                     ESTA identidad ya votó.
-// POST /api/poll  { driverId } -> emite el voto de esta identidad.
+// GET  /api/poll  -> devuelve la encuesta activa con opciones,
+//                     porcentajes, total de votos, y el voto de LA
+//                     CUENTA logueada (null si no hay sesión).
+// POST /api/poll  { pollId, driverId } -> requiere estar logueado.
+//
+// CAMBIO DE INTEGRIDAD (v2): antes un voto quedaba atado solo a la
+// identidad anónima (cookie del navegador) — borrar cookies o abrir
+// una ventana de incógnito permitía votar de nuevo sin límite. Ahora
+// votar EXIGE una cuenta, y la unicidad real es (poll_id, user_id) vía
+// un índice único parcial en D1 (ver migración 0006) — no se puede
+// eludir reinstalando el navegador ni limpiando cookies.
 //
 // Reglas:
 //   - Se auto-crea una fila en gp_polls la primera vez que se consulta
 //     una carrera/sprint nueva (season+round+session_type es UNIQUE).
-//   - Abre apenas esa carrera pasa a ser "la próxima" (puede ser días
-//     antes del fin de semana de sesiones) y cierra en el momento exacto
-//     en que larga la sesión correspondiente (Race o Sprint).
-//   - Un voto por identidad por encuesta (constraint UNIQUE en D1).
-//   - Las opciones de piloto salen de la tabla de posiciones actual
-//     (grid activo), no de un catálogo hardcodeado que se desactualiza.
+//   - Abre apenas esa carrera pasa a ser "la próxima" y cierra 30 min
+//     antes de que largue la sesión correspondiente (Race o Sprint).
+//   - Un voto por CUENTA por encuesta (no por navegador/identidad).
+//   - Se puede cambiar el voto mientras la encuesta siga abierta.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
 import { checkRateLimit } from '../_lib/ratelimit.js';
+import { getUserFromRequest } from '../_lib/session.js';
 
 const JOLPICA_BASE = 'https://api.jolpi.ca/ergast/f1';
 
 export async function onRequestGet(context) {
-  const { env, data } = context;
+  const { request, env } = context;
   if (!env.F1_DB) return json({ configured: false });
 
   const target = await resolveTargetRace(env);
@@ -31,6 +37,7 @@ export async function onRequestGet(context) {
 
   try {
     const poll = await ensurePoll(env.F1_DB, target);
+    const user = await getUserFromRequest(request, env.F1_DB);
     const now = Date.now();
     const isOpen = now >= new Date(poll.opens_at).getTime() && now < new Date(poll.closes_at).getTime();
     const isClosed = now >= new Date(poll.closes_at).getTime();
@@ -38,7 +45,7 @@ export async function onRequestGet(context) {
     const [driversRes, votesRes, yourVoteRow] = await Promise.all([
       fetchResilient(`${JOLPICA_BASE}/current/driverStandings.json`, { fetchOptions: { headers: jolpicaHeaders() }, kv: env.F1_KV ?? null, staleKey: 'stale:poll:drivers' }),
       env.F1_DB.prepare('SELECT driver_id, COUNT(*) as votes FROM gp_poll_votes WHERE poll_id = ? GROUP BY driver_id').bind(poll.id).all(),
-      data.identityId ? env.F1_DB.prepare('SELECT driver_id FROM gp_poll_votes WHERE poll_id = ? AND identity_id = ?').bind(poll.id, data.identityId).first() : null,
+      user ? env.F1_DB.prepare('SELECT driver_id FROM gp_poll_votes WHERE poll_id = ? AND user_id = ?').bind(poll.id, user.id).first() : null,
     ]);
 
     const driverList = driversRes.ok
@@ -63,6 +70,7 @@ export async function onRequestGet(context) {
         raceName: target.raceName, opensAt: poll.opens_at, closesAt: poll.closes_at,
         isOpen, isClosed, totalVotes, options,
         yourVote: yourVoteRow?.driver_id ?? null,
+        requiresLogin: !user, // el frontend usa esto para mostrar "iniciá sesión para votar" en vez de los botones
         winnerDriverId: poll.winner_driver_id ?? null,
       },
     });
@@ -72,11 +80,13 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPost(context) {
-  const { request, env, data } = context;
+  const { request, env } = context;
   if (!env.F1_DB) return json({ error: 'not_configured' }, 503);
-  if (!data.identityId) return json({ error: 'no_identity' }, 400);
 
-  const allowed = await checkRateLimit(env.F1_KV, `poll-vote:${data.identityId}`, 20, 300);
+  const user = await getUserFromRequest(request, env.F1_DB);
+  if (!user) return json({ error: 'login_required' }, 401);
+
+  const allowed = await checkRateLimit(env.F1_KV, `poll-vote:${user.id}`, 20, 300);
   if (!allowed) return json({ error: 'rate_limited' }, 429);
 
   let body;
@@ -94,16 +104,19 @@ export async function onRequestPost(context) {
   if (now >= new Date(poll.closes_at).getTime()) return json({ error: 'poll_closed' }, 403);
 
   try {
+    // La identidad anónima queda como dato secundario (auditoría), pero
+    // la unicidad real la garantiza el índice único parcial sobre
+    // (poll_id, user_id) — ver migración 0006.
     try {
       await env.F1_DB.prepare(
-        'INSERT INTO gp_poll_votes (poll_id, identity_id, driver_id) VALUES (?, ?, ?)'
-      ).bind(pollId, data.identityId, driverId).run();
+        'INSERT INTO gp_poll_votes (poll_id, identity_id, user_id, driver_id) VALUES (?, ?, ?, ?)'
+      ).bind(pollId, context.data.identityId ?? null, user.id, driverId).run();
     } catch {
-      // UNIQUE(poll_id, identity_id) ya cubierto: si falla es porque ya votó.
-      // Permitimos "cambiar el voto" mientras la encuesta siga abierta.
+      // Choque contra idx_poll_votes_one_per_user: ya había votado con
+      // esta cuenta. Permitimos "cambiar el voto" mientras siga abierta.
       await env.F1_DB.prepare(
-        'UPDATE gp_poll_votes SET driver_id = ?, voted_at = datetime("now") WHERE poll_id = ? AND identity_id = ?'
-      ).bind(driverId, pollId, data.identityId).run();
+        'UPDATE gp_poll_votes SET driver_id = ?, voted_at = datetime("now") WHERE poll_id = ? AND user_id = ?'
+      ).bind(driverId, pollId, user.id).run();
     }
     return json({ ok: true });
   } catch {
@@ -124,14 +137,11 @@ async function resolveTargetRace(env) {
 
   for (const r of races) {
     const raceTime = new Date(r.time ? `${r.date}T${r.time}` : `${r.date}T00:00:00Z`).getTime();
-    // primera carrera cuyo horario todavía no pasó -> es la que corresponde votar
-    // (cubre tanto "en curso esta semana" como "la próxima")
     if (raceTime > now - 3 * 60 * 60 * 1000) {
       const sessionType = r.Sprint ? 'sprint' : 'race';
       const closeSession = r.Sprint ? r.Sprint : { date: r.date, time: r.time };
       const opensAt = new Date().toISOString();
       const rawCloseTime = new Date(closeSession.time ? `${closeSession.date}T${closeSession.time}` : `${closeSession.date}T00:00:00Z`).getTime();
-      // Pediste que cierre 30 min ANTES del arranque, no justo cuando larga.
       const closesAt = new Date(rawCloseTime - 30 * 60 * 1000).toISOString();
       return { season: r.season, round: Number(r.round), raceName: r.raceName, sessionType, opensAt, closesAt };
     }
@@ -144,10 +154,6 @@ async function ensurePoll(db, target) {
     'INSERT OR IGNORE INTO gp_polls (season, round, session_type, opens_at, closes_at) VALUES (?, ?, ?, ?, ?)'
   ).bind(target.season, target.round, target.sessionType, target.opensAt, target.closesAt).run();
 
-  // Auto-corrección: adelanta tanto la apertura como el cierre si la
-  // encuesta ya existía de antes con valores más permisivos/tardíos que
-  // los que calculamos ahora (por ejemplo, de antes de este cambio, que
-  // cerraba justo cuando largaba la carrera en vez de 30 min antes).
   await db.prepare(
     'UPDATE gp_polls SET opens_at = MIN(opens_at, ?), closes_at = MIN(closes_at, ?) WHERE season = ? AND round = ? AND session_type = ?'
   ).bind(target.opensAt, target.closesAt, target.season, target.round, target.sessionType).run();

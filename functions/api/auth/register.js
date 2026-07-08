@@ -52,16 +52,16 @@ export async function onRequestPost(context) {
     await env.F1_DB.prepare('UPDATE identities SET user_id = ? WHERE id = ?').bind(userId, data.identityId).run();
   }
 
-  const { token } = await createSession(env.F1_DB, userId);
+  const { token, ttl } = await createSession(env.F1_DB, userId, Boolean(body.remember));
 
   // TODO (cuando exista RESEND_API_KEY): generar email_verification_tokens
   // y disparar el mail de verificación acá.
 
   return new Response(JSON.stringify({
-    user: { id: userId, email, nickname, emailVerified: Boolean(EMAIL_VERIFIED_DEFAULT), isAdmin: false },
+    user: { id: userId, email, nickname, emailVerified: Boolean(EMAIL_VERIFIED_DEFAULT), isAdmin: false, createdAt: new Date().toISOString() },
   }), {
     status: 201,
-    headers: { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookieHeader(token) },
+    headers: { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookieHeader(token, ttl) },
   });
 }
 

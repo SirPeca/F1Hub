@@ -11,7 +11,7 @@ export async function onRequestGet(context) {
   return new Response(JSON.stringify({
     user: user ? {
       id: user.id, email: user.email, nickname: user.nickname, avatarUrl: user.avatar_url,
-      emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin),
+      emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin), createdAt: user.created_at,
     } : null,
   }), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
