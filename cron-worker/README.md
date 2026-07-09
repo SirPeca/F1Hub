@@ -58,6 +58,14 @@ npm install
   entre cada una para no saturar su rate limit) y guarda en KV cuántos
   campeonatos tiene cada piloto. `functions/api/compare.js` (del lado
   de Pages) lee ese resultado.
+- **`30 4 * * *`** (NUEVO): precalcula victorias/podios/poles/temporadas
+  completas para ~45 pilotos (grid actual + leyendas de alta demanda
+  como Schumacher, Senna, Vettel, Alonso) y las deja en KV bajo
+  `precomputed:driverstats`. Esto es lo que hace que Comparar y
+  Favoritos dejen de depender de calcular en vivo cada vez — antes
+  cualquier hipo de Jolpica en el momento exacto de la consulta hacía
+  fallar la comparación; ahora, para estos ~45 pilotos, ni siquiera se
+  toca la red en el momento — es una simple lectura de KV.
 
 ## Importante: esto no lo pude probar en vivo
 

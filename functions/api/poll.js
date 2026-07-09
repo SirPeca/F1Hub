@@ -104,20 +104,18 @@ export async function onRequestPost(context) {
   if (now >= new Date(poll.closes_at).getTime()) return json({ error: 'poll_closed' }, 403);
 
   try {
-    // La identidad anónima queda como dato secundario (auditoría), pero
-    // la unicidad real la garantiza el índice único parcial sobre
-    // (poll_id, user_id) — ver migración 0006.
-    try {
-      await env.F1_DB.prepare(
-        'INSERT INTO gp_poll_votes (poll_id, identity_id, user_id, driver_id) VALUES (?, ?, ?, ?)'
-      ).bind(pollId, context.data.identityId ?? null, user.id, driverId).run();
-    } catch {
-      // Choque contra idx_poll_votes_one_per_user: ya había votado con
-      // esta cuenta. Permitimos "cambiar el voto" mientras siga abierta.
-      await env.F1_DB.prepare(
-        'UPDATE gp_poll_votes SET driver_id = ?, voted_at = datetime("now") WHERE poll_id = ? AND user_id = ?'
-      ).bind(driverId, pollId, user.id).run();
-    }
+    // UPSERT atómico: una sola operación, sin el patrón frágil de
+    // "insertar y si falla actualizar por otra columna" que causaba el
+    // bug de votos que no se guardaban (ver migración 0008). Con la
+    // tabla reconstruida, la ÚNICA restricción real es (poll_id,
+    // user_id), así que el ON CONFLICT puede apuntar a ella directo.
+    await env.F1_DB.prepare(`
+      INSERT INTO gp_poll_votes (poll_id, identity_id, user_id, driver_id)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (poll_id, user_id) WHERE user_id IS NOT NULL
+      DO UPDATE SET driver_id = excluded.driver_id, voted_at = datetime('now')
+    `).bind(pollId, context.data.identityId ?? null, user.id, driverId).run();
+
     return json({ ok: true });
   } catch {
     return json({ error: 'server_error' }, 500);

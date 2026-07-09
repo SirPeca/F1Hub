@@ -1,27 +1,23 @@
 // =========================================
-// F1 Hub — functions/api/compare.js  (Fase C)  v3
+// F1 Hub — functions/api/compare.js  (Fase C)  v4
 //
 // GET /api/compare?a=hamilton&b=verstappen
+//
+// v4 — CAMBIO DE ESTRATEGIA: en vez de depender de calcular en vivo
+// cada vez (frágil ante el rate limit compartido de Jolpica), ahora se
+// consulta PRIMERO un precálculo diario armado por cron-worker (grid
+// actual + leyendas de alta demanda) — ver
+// cron-worker/src/index.js JOB 3. El cálculo en vivo queda como
+// respaldo para pilotos fuera de esa lista, con su propio caché de 1h
+// + respaldo de 7 días en KV.
 //
 // v3 — dos bugs reales corregidos, confirmados con evidencia (Vettel
 // mostrando 0 victorias/podios/poles siendo un 4 veces campeón):
 //
 // 1) LA DETECCIÓN DE ERROR ERA DEMASIADO ESTRECHA. Solo marcaba "falló"
 //    si el perfil Y las victorias Y las poles fallaban los tres a la
-//    vez. Pero el perfil (nombre, foto) es una consulta liviana que
-//    casi nunca falla, mientras que victorias/podios/poles pueden
-//    fallar de forma independiente por un hipo transitorio de Jolpica
-//    — y `wins ?? 0` convertía ese fallo en un cero silencioso,
-//    indistinguible de "de verdad tiene cero". Ahora CUALQUIER
-//    estadística que falle marca error explícito, no se disfraza de 0.
-//
-// 2) VELOCIDAD: se cachea el resultado completo de cada piloto por
-//    separado (1 hora) en el edge cache de Cloudflare. La primera vez
-//    que alguien compara a Verstappen paga el costo completo (~5
-//    pedidos a Jolpica); la próxima persona que lo compare — con
-//    cualquier otro piloto — lo recibe instantáneo desde caché. Como
-//    la myoría de las comparaciones repiten pilotos populares, esto
-//    hace que el caso común se sienta inmediato.
+//    vez. Ahora CUALQUIER estadística que falle marca error explícito,
+//    no se disfraza de 0.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
@@ -48,27 +44,31 @@ export async function onRequestGet(context) {
 }
 
 async function getCachedDriverStats(env, driverId) {
+  const kv = env.F1_KV ?? null;
+
+  // 1) Precálculo diario del cron-worker — la fuente más confiable,
+  // no depende de que Jolpica responda bien justo ahora. Cubre el
+  // grid actual + leyendas de alta demanda (ver cron-worker/src/index.js).
+  const precomputed = await getPrecomputedDriverStats(kv, driverId);
+  if (precomputed) return precomputed;
+
+  // 2) Caché de 1h en el edge — por si ya lo calculamos en vivo hace poco
+  // (pilotos fuera del precálculo, o el cron-worker todavía no corrió).
   const cache = caches.default;
   const cacheReq = new Request(`https://internal.f1hub/cache/driver-stats/${driverId}/v3`);
   const cached = await cache.match(cacheReq);
   if (cached) return cached.json();
 
+  // 3) Cálculo en vivo, con su propio respaldo de 7 días en KV ante fallos.
   const stats = await driverStats(env, driverId);
-  const kv = env.F1_KV ?? null;
 
   if (!stats.error) {
-    // Resultado sano: lo guardamos en el caché de 1h (rápido) Y en KV
-    // por 7 días (respaldo de largo plazo si Jolpica tiene un mal día).
     const res = new Response(JSON.stringify(stats), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${DRIVER_CACHE_TTL}` } });
     cache.put(cacheReq, res.clone());
     if (kv) kv.put(`stale:cmp:fullstats:${driverId}`, JSON.stringify(stats), { expirationTtl: FALLBACK_KV_TTL }).catch(() => {});
     return stats;
   }
 
-  // El cálculo fresco falló — antes de rendirnos y mostrar "error",
-  // fijamos si tenemos un resultado bueno de este piloto de hasta 7
-  // días atrás. Un piloto que ya comparamos antes con éxito no debería
-  // mostrar error solo porque Jolpica tuvo un hipo justo ahora.
   if (kv) {
     try {
       const raw = await kv.get(`stale:cmp:fullstats:${driverId}`);
@@ -76,6 +76,22 @@ async function getCachedDriverStats(env, driverId) {
     } catch { /* si también falla KV, seguimos al error normal */ }
   }
   return stats;
+}
+
+/** Lee el precálculo diario armado por cron-worker (JOB 3). Si ese
+ * Worker todavía no está desplegado, o el piloto no está en la lista
+ * precalculada, devuelve null (cae al cálculo en vivo) — nunca inventa. */
+async function getPrecomputedDriverStats(kv, driverId) {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get('precomputed:driverstats');
+    if (!raw) return null;
+    const { drivers } = JSON.parse(raw);
+    const entry = drivers?.[driverId];
+    if (!entry) return null;
+    const championships = await getPrecomputedChampionships(kv, driverId);
+    return { ...entry, championships, error: null };
+  } catch { return null; }
 }
 
 async function driverStats(env, driverId) {

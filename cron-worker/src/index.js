@@ -6,9 +6,12 @@
 // Worker aparte para tareas programadas). Comparte la misma D1 y el
 // mismo KV que el proyecto de Pages vía bindings idénticos.
 //
-// Dos trabajos, distinguidos por `controller.cron`:
+// Tres trabajos, distinguidos por `controller.cron`:
 //   */15 * * * *  -> avisa por push si una sesión arranca en breve
 //   0 4 * * *     -> recalcula campeonatos históricos por piloto (KV)
+//   30 4 * * *    -> precalcula estadísticas completas de pilotos
+//                    populares (grid actual + leyendas) para que
+//                    Comparar/Favoritos no dependan de calcular en vivo
 // =========================================
 
 import webpush from 'web-push';
@@ -22,6 +25,8 @@ export default {
       ctx.waitUntil(notifyUpcomingSessions(env));
     } else if (controller.cron === '0 4 * * *') {
       ctx.waitUntil(precomputeChampionships(env));
+    } else if (controller.cron === '30 4 * * *') {
+      ctx.waitUntil(precomputeDriverStats(env));
     }
   },
 
@@ -136,4 +141,92 @@ async function precomputeChampionships(env) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// =========================================
+// JOB 3: precálculo de estadísticas de Comparar/Favoritos
+//
+// Esto es el cambio de estrategia para la pestaña Comparar: en vez de
+// calcular victorias/podios/poles/temporadas EN EL MOMENTO en que
+// alguien mira a un piloto (dependiente de que Jolpica responda bien
+// 4-6 consultas justo en ese instante — la causa de fondo de que
+// Comparar fuera poco confiable), se precalcula UNA VEZ POR DÍA para
+// los pilotos más buscados y se deja listo en KV. compare.js y
+// driver-summary.js primero miran acá; si el piloto no está en esta
+// lista (alguien poco conocido), recién ahí calculan en vivo como
+// respaldo.
+// =========================================
+
+// Leyendas retiradas de alta demanda — el grid actual se suma dinámico
+// abajo (no hace falta listarlo a mano, cambia cada temporada).
+const LEGACY_DRIVER_IDS = [
+  'michael_schumacher', 'senna', 'prost', 'vettel', 'alonso', 'raikkonen',
+  'button', 'rosberg', 'massa', 'webber', 'hakkinen', 'mansell', 'piquet',
+  'lauda', 'stewart', 'clark', 'fangio', 'ricciardo', 'bottas', 'hulkenberg',
+  'perez', 'kevin_magnussen',
+];
+
+async function precomputeDriverStats(env) {
+  if (!env.F1_KV) { console.log('Sin KV — no se puede guardar el precálculo.'); return; }
+
+  const currentIds = await getCurrentGridIds();
+  const driverIds = [...new Set([...currentIds, ...LEGACY_DRIVER_IDS])];
+  console.log(`Precalculando estadísticas para ${driverIds.length} pilotos…`);
+
+  const results = {};
+  for (const id of driverIds) {
+    try {
+      results[id] = await computeOneDriverStats(id);
+    } catch (err) {
+      console.log(`Fallo calculando ${id}: ${err.message}`);
+    }
+    await sleep(300); // ser buen vecino del rate limit compartido de Jolpica
+  }
+
+  await env.F1_KV.put('precomputed:driverstats', JSON.stringify({ updatedAt: new Date().toISOString(), drivers: results }));
+  console.log(`Estadísticas precalculadas: ${Object.keys(results).length}/${driverIds.length} pilotos.`);
+}
+
+async function getCurrentGridIds() {
+  try {
+    const res = await fetch(`${JOLPICA_BASE}/current/driverStandings.json`, { headers: { 'User-Agent': 'f1hub-cron/1.0' } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings ?? [])
+      .map((d) => d.Driver?.driverId).filter(Boolean);
+  } catch { return []; }
+}
+
+async function computeOneDriverStats(id) {
+  const [wins, p2, p3, poles, seasons, profile] = await Promise.all([
+    totalFor(`${JOLPICA_BASE}/drivers/${id}/results/1.json?limit=1`),
+    totalFor(`${JOLPICA_BASE}/drivers/${id}/results/2.json?limit=1`),
+    totalFor(`${JOLPICA_BASE}/drivers/${id}/results/3.json?limit=1`),
+    totalFor(`${JOLPICA_BASE}/drivers/${id}/qualifying/1.json?limit=1`),
+    totalFor(`${JOLPICA_BASE}/drivers/${id}/seasons.json?limit=1`),
+    fetch(`${JOLPICA_BASE}/drivers/${id}.json`, { headers: { 'User-Agent': 'f1hub-cron/1.0' } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.MRData?.DriverTable?.Drivers?.[0] ?? null),
+  ]);
+
+  const wins_ = wins ?? 0, p2_ = p2 ?? 0, p3_ = p3 ?? 0;
+  return {
+    driverId: id,
+    name: profile ? `${profile.givenName} ${profile.familyName}` : id,
+    nationality: profile?.nationality ?? null,
+    wins: wins_,
+    podiums: wins_ + p2_ + p3_,
+    poles: poles ?? 0,
+    seasons: seasons ?? null,
+  };
+}
+
+async function totalFor(url) {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'f1hub-cron/1.0' } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const n = Number(data?.MRData?.total);
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
 }

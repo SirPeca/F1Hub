@@ -262,7 +262,10 @@ async function loadCalendar() {
     renderCalendarList();
     updateHeaderStatus();
     loadPoll();
-    if (calendarData.stale) showStaleBanner(heroEl);
+    // "stale" ya no se le muestra al usuario (nadie necesita saber de
+    // dónde viene el dato mientras sea correcto) — sigue existiendo
+    // internamente para que el backend sepa cachear más corto y
+    // reintentar pronto, pero no genera ningún aviso en pantalla.
   } catch (err) {
     renderUnavailable(heroEl, listEl, 'calendario');
   }
@@ -279,13 +282,6 @@ function renderUnavailable(heroEl, secondaryEl, label) {
     <button class="retry-btn" data-action="reload">Reintentar</button>
   `;
   if (secondaryEl) { secondaryEl.classList.remove('skeleton-block'); secondaryEl.innerHTML = ''; }
-}
-
-function showStaleBanner(container) {
-  const badge = document.createElement('div');
-  badge.className = 'stale-banner';
-  badge.textContent = '⚠️ Mostrando la última información guardada — actualizando en segundo plano.';
-  container.prepend(badge);
 }
 
 function renderHero() {
@@ -522,7 +518,7 @@ async function loadStandings() {
       return;
     }
     document.getElementById('standings-updated-note').textContent = describeStandingsRound(data);
-    const staleNote = data.stale ? `<div class="stale-banner">⚠️ Datos guardados — actualizando en segundo plano.</div>` : '';
+    const staleNote = ''; // ya no se muestra al usuario (dato interno de backend)
     el.innerHTML = staleNote + data.standings.map((s) => {
       if (type === 'drivers') {
         return `<div class="st-row ${s.position <= 3 ? 'top3' : ''}">
@@ -599,7 +595,7 @@ async function loadHistoryYear() {
       return;
     }
 
-    const staleNote = data.stale ? `<div class="stale-banner">⚠️ Datos guardados — actualizando en segundo plano.</div>` : '';
+    const staleNote = ''; // ya no se muestra al usuario (dato interno de backend)
     el.innerHTML = staleNote + `
       <div class="champ-cards">
         <div class="champ-card">
@@ -947,7 +943,7 @@ async function runCompare() {
           <div class="compare-stat-val ${bWin ? 'win' : ''}" style="text-align:right">${bv}</div>
         </div>`;
       }).join('')}
-      <p class="favorites-hint">${(data.a.stale || data.b.stale) ? '⚠️ Mostrando el último dato guardado para algún piloto (el proveedor está lento ahora mismo). ' : ''}${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
+      <p class="favorites-hint">${data.a.championships === null || data.b.championships === null ? 'Campeonatos: se calculan con un proceso diario aparte — todavía no corrió por primera vez.' : ''} ${mediaA.found || mediaB.found ? 'Fotos vía Wikipedia/Wikimedia Commons.' : ''}</p>
     `;
   } catch {
     el.innerHTML = `<div class="live-empty">No se pudo comparar en este momento. <button class="retry-btn-inline" data-action="rerun-compare">Reintentar</button></div>`;

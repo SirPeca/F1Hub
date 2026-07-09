@@ -5,8 +5,13 @@ compatibility_flags = ["nodejs_compat"]  # necesario para que funcione la librer
 
 # Corre cada 15 min: revisa si alguna sesión arranca en breve y notifica.
 # Corre 1 vez por día (04:00 UTC): recalcula campeonatos históricos por piloto.
+# Corre 1 vez por día (04:30 UTC): precalcula estadísticas completas
+#   (victorias/podios/poles/temporadas) de los ~45 pilotos más buscados
+#   (grid actual + leyendas) — esto es lo que hace que Comparar y
+#   Favoritos sean confiables en vez de depender de que Jolpica responda
+#   bien 4-6 consultas justo en el momento en que alguien los mira.
 [triggers]
-crons = ["*/15 * * * *", "0 4 * * *"]
+crons = ["*/15 * * * *", "0 4 * * *", "30 4 * * *"]
 
 # Mismos bindings que el proyecto de Pages — DEBEN apuntar a la MISMA
 # base D1 y el MISMO namespace KV que f1hub (Pages), sino este Worker

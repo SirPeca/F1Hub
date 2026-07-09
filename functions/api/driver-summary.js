@@ -1,13 +1,13 @@
 // =========================================
-// F1 Hub — functions/api/driver-summary.js  (Fase C)  v2
+// F1 Hub — functions/api/driver-summary.js  (Fase C)  v3
 //
 // GET /api/driver-summary?id=hamilton
 //
-// Mismos dos fixes que compare.js v3: la v1 convertía cualquier fallo
-// parcial en un "0" silencioso (wins ?? 0), y el header Cache-Control
-// que tenía no hacía nada real — un Function response necesita
-// engancharse explícitamente al Cache API de Cloudflare, el header
-// solo no alcanza para que quede en el edge.
+// v3 — mismo cambio de estrategia que compare.js: consulta primero el
+// precálculo diario de cron-worker (JOB 3) antes de calcular en vivo.
+// Esto es lo que hace confiable a Favoritos con varios pilotos a la
+// vez, en vez de depender de que Jolpica responda bien 4 consultas por
+// cada uno justo en el momento en que abrís la pestaña.
 // =========================================
 
 import { fetchResilient, jolpicaHeaders } from '../_lib/upstream.js';
@@ -20,12 +20,19 @@ export async function onRequestGet(context) {
   const id = new URL(request.url).searchParams.get('id');
   if (!id) return json({ error: 'missing_id' }, 400);
 
+  const kv = env.F1_KV ?? null;
+
+  // 1) Precálculo diario — la fuente más confiable.
+  const precomputed = await getPrecomputedDriverStats(kv, id);
+  if (precomputed) return json(precomputed);
+
+  // 2) Caché de 1h en el edge.
   const cache = caches.default;
   const cacheReq = new Request(`https://internal.f1hub/cache/driver-summary/${id}/v2`);
   const cached = await cache.match(cacheReq);
   if (cached) return cached;
 
-  const kv = env.F1_KV ?? null;
+  // 3) Cálculo en vivo (respaldo para pilotos fuera del precálculo).
   const [wins, p2, p3, poles, profile] = await Promise.all([
     total(`${JOLPICA_BASE}/drivers/${id}/results/1.json?limit=1`, kv, `stale:sum:wins:${id}`),
     total(`${JOLPICA_BASE}/drivers/${id}/results/2.json?limit=1`, kv, `stale:sum:p2:${id}`),
@@ -50,8 +57,23 @@ export async function onRequestGet(context) {
   };
 
   const res = new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': hasError ? 'no-store' : `public, max-age=${CACHE_TTL}` } });
-  if (!hasError) cache.put(cacheReq, res.clone()); // nunca cacheamos un fallo transitorio
+  if (!hasError) cache.put(cacheReq, res.clone());
   return res;
+}
+
+async function getPrecomputedDriverStats(kv, id) {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get('precomputed:driverstats');
+    if (!raw) return null;
+    const { drivers } = JSON.parse(raw);
+    const entry = drivers?.[id];
+    if (!entry) return null;
+    return {
+      driverId: id, nationality: entry.nationality ?? null, dateOfBirth: null,
+      wins: entry.wins, podiums: entry.podiums, poles: entry.poles, error: null,
+    };
+  } catch { return null; }
 }
 
 async function total(url, kv, staleKey) {
