@@ -1,0 +1,12 @@
+/* ============================================================
+   VELOCITY UI — velocity.css
+   Entry point. Importa todos los módulos del Design System.
+   Este es el único archivo que referencia index.html.
+   ============================================================ */
+
+@import './tokens.css';
+@import './base.css';
+@import './animations.css';
+@import './layout.css';
+@import './components.css';
+@import './utilities.css';

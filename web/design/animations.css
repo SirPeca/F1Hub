@@ -1,0 +1,178 @@
+/* ============================================================
+   VELOCITY UI — animations.css
+   Nunca transition:all. Cada propiedad declarada explícita.
+   Las animaciones comunican velocidad, precisión, tecnología.
+   ============================================================ */
+
+/* ── LIGHTS OUT — secuencia de semáforos F1 ──────────────── */
+#lights-out {
+  position: fixed;
+  inset: 0;
+  background: #050506;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: rig-fade var(--dur-normal) ease var(--dur-slower) forwards;
+  /* dur-slower = delay antes del fade out total */
+}
+
+.lights-rig {
+  display: flex;
+  gap: 14px;
+  padding: 20px 26px;
+  background: #0d0d0f;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-modal);
+  position: relative;
+}
+
+/* Línea de carbono debajo del rig */
+.lights-rig::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: var(--red);
+  opacity: 0;
+  animation: rig-stripe .1s ease 2.1s forwards;
+}
+
+@keyframes rig-stripe { to { opacity: .6; } }
+
+.bulb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #1e0604;
+  box-shadow: inset 0 0 6px rgba(0,0,0,.7);
+}
+
+/* Bulbs 1–4: encendido */
+.bulb:nth-child(1) { animation: bulb-on var(--dur-fast) ease .15s forwards; }
+.bulb:nth-child(2) { animation: bulb-on var(--dur-fast) ease .55s forwards; }
+.bulb:nth-child(3) { animation: bulb-on var(--dur-fast) ease .95s forwards; }
+.bulb:nth-child(4) { animation: bulb-on var(--dur-fast) ease 1.35s forwards; }
+/* Bulb 5: APAGADO = LARGADA */
+.bulb:nth-child(5) { animation: bulb-out .2s ease 2.08s forwards; }
+
+@keyframes bulb-on {
+  to {
+    background: var(--red-hi);
+    box-shadow: 0 0 18px 4px var(--red-glow), inset 0 0 6px rgba(255,255,255,.35);
+  }
+}
+@keyframes bulb-out {
+  from { background: var(--red-hi); box-shadow: 0 0 18px 4px var(--red-glow); }
+  to   { background: #171718; box-shadow: none; }
+}
+@keyframes rig-fade { to { opacity: 0; visibility: hidden; } }
+
+@media (prefers-reduced-motion: reduce) {
+  #lights-out { display: none; }
+}
+
+/* ── VIEW TRANSITIONS ─────────────────────────────────────── */
+.view { animation: view-in var(--dur-normal) var(--ease-out); }
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── FADE ─────────────────────────────────────────────────── */
+@keyframes fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+.anim-fade-in  { animation: fade-in  var(--dur-normal) var(--ease-inout) both; }
+.anim-fade-out { animation: fade-out var(--dur-normal) var(--ease-inout) both; }
+
+/* ── SLIDE ─────────────────────────────────────────────────── */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.anim-slide-up   { animation: slide-up   var(--dur-normal) var(--ease-out) both; }
+.anim-slide-down { animation: slide-down var(--dur-normal) var(--ease-out) both; }
+
+/* ── SCALE / PRESS ─────────────────────────────────────────── */
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.anim-scale-in { animation: scale-in var(--dur-normal) var(--ease-spring) both; }
+
+/* Micro-interacción de presión */
+.pressable {
+  transition: transform var(--dur-instant) var(--ease-inout);
+}
+.pressable:active { transform: scale(.94); }
+
+/* ── PULSE (dot en vivo) ───────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--red-lo); }
+  50%       { opacity: .5; box-shadow: 0 0 0 5px transparent; }
+}
+.pulsing .dot { animation: pulse 1.3s ease-in-out infinite; }
+
+/* ── SKELETON SHIMMER ──────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-card)   0%,
+    var(--surface-elevated) 50%,
+    var(--surface-card)   100%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* ── TOAST ─────────────────────────────────────────────────── */
+.toast {
+  transition:
+    opacity    var(--dur-normal) var(--ease-inout),
+    transform  var(--dur-normal) var(--ease-out);
+}
+
+/* ── HOVER STATES — transiciones explícitas ────────────────── */
+/* Nunca usar transition:all */
+.card-hover {
+  transition:
+    background-color var(--dur-fast) var(--ease-inout),
+    border-color     var(--dur-fast) var(--ease-inout),
+    box-shadow       var(--dur-fast) var(--ease-inout),
+    transform        var(--dur-fast) var(--ease-inout);
+}
+.card-hover:hover {
+  background-color: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.btn-transition {
+  transition:
+    background-color var(--dur-fast) var(--ease-inout),
+    border-color     var(--dur-fast) var(--ease-inout),
+    color            var(--dur-fast) var(--ease-inout),
+    box-shadow       var(--dur-fast) var(--ease-inout),
+    transform        var(--dur-instant) var(--ease-inout),
+    opacity          var(--dur-fast) var(--ease-inout);
+}
+
+/* ── STAGGER HELPERS ───────────────────────────────────────── */
+/* Para listas de cards: cada hijo aparece con delay incremental */
+.stagger > *:nth-child(1) { animation-delay:  0ms; }
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay:120ms; }
+.stagger > *:nth-child(5) { animation-delay:160ms; }
+.stagger > *:nth-child(6) { animation-delay:200ms; }
+.stagger > *:nth-child(n+7) { animation-delay:240ms; }

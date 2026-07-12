@@ -1,0 +1,138 @@
+/* ============================================================
+   VELOCITY UI — tokens.css
+   F1 Hub Design System v1.0
+   Fundación completa: superficies, tipografía, espaciado,
+   bordes, sombras, animaciones, status, radios.
+   ============================================================ */
+
+:root {
+
+  /* ── SURFACES ─────────────────────────────────────────── */
+  --surface-page:      #090a0d;   /* fondo base — negro carbono */
+  --surface-card:      #111318;   /* cards normales */
+  --surface-elevated:  #181b21;   /* cards elevadas / overlays */
+  --surface-modal:     #1d2028;   /* modales / drawers */
+  --surface-hover:     rgba(255,255,255,.04);
+  --surface-active:    rgba(255,255,255,.07);
+  --surface-live:      rgba(225,6,0,.08);   /* fondo de estados en vivo */
+  --surface-gold:      rgba(212,175,55,.06);
+
+  /* ── BORDER ───────────────────────────────────────────── */
+  --border-light:      rgba(255,255,255,.05);
+  --border-medium:     rgba(255,255,255,.09);
+  --border-strong:     rgba(255,255,255,.16);
+  --border-live:       rgba(225,6,0,.5);
+  --border-gold:       rgba(212,175,55,.35);
+  --border-focus:      #e10600;
+
+  /* ── TYPOGRAPHY ───────────────────────────────────────── */
+  /* Colores */
+  --text-primary:      #f0f2f4;
+  --text-secondary:    #8a8f9a;
+  --text-tertiary:     #4e5260;
+  --text-live:         #ff3a2d;
+  --text-gold:         #d4af37;
+  --text-on-red:       #ffffff;
+
+  /* Familias */
+  --font-display:      'Titillium Web', system-ui, sans-serif;
+  --font-mono:         'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Escalas tipográficas */
+  --text-xs:    10px;
+  --text-sm:    11.5px;
+  --text-base:  13px;
+  --text-md:    14.5px;
+  --text-lg:    17px;
+  --text-xl:    21px;
+  --text-2xl:   26px;
+  --text-3xl:   32px;
+  --text-hero:  40px;
+
+  /* Pesos */
+  --fw-regular:  400;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+  --fw-black:    900;
+
+  /* Tracking */
+  --tracking-tight:  -0.3px;
+  --tracking-normal: 0;
+  --tracking-wide:   0.6px;
+  --tracking-wider:  1.2px;
+  --tracking-widest: 2px;
+
+  /* ── SPACING ──────────────────────────────────────────── */
+  --space-1:    4px;
+  --space-2:    8px;
+  --space-3:    12px;
+  --space-4:    16px;
+  --space-5:    20px;
+  --space-6:    24px;
+  --space-8:    32px;
+  --space-10:   40px;
+  --space-12:   48px;
+  --space-16:   64px;
+
+  /* ── RADIUS ───────────────────────────────────────────── */
+  --radius-xs:  4px;
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+  --radius-pill: 9999px;
+
+  /* ── SHADOW ───────────────────────────────────────────── */
+  --shadow-xs:   0 1px 3px rgba(0,0,0,.4);
+  --shadow-sm:   0 2px 8px rgba(0,0,0,.45);
+  --shadow-card: 0 4px 18px rgba(0,0,0,.5);
+  --shadow-hero: 0 12px 40px rgba(0,0,0,.6);
+  --shadow-modal:0 20px 60px rgba(0,0,0,.7);
+  --shadow-live: 0 0 0 1px rgba(225,6,0,.35), 0 6px 24px rgba(225,6,0,.12);
+  --shadow-gold: 0 0 0 1px rgba(212,175,55,.2), 0 4px 16px rgba(212,175,55,.08);
+  --shadow-glow-red: 0 0 18px 4px rgba(225,6,0,.18);
+
+  /* ── BRAND / STATUS COLORS ────────────────────────────── */
+  --red:         #e10600;
+  --red-hi:      #ff3a2d;
+  --red-lo:      rgba(225,6,0,.14);
+  --gold:        #d4af37;
+  --gold-hi:     #f0cc55;
+  --green:       #00d26a;
+  --yellow:      #ffc300;
+  --blue:        #4d9fff;
+
+  /* ── ANIMATION DURATIONS ──────────────────────────────── */
+  --dur-instant: 80ms;
+  --dur-fast:    150ms;
+  --dur-normal:  250ms;
+  --dur-slow:    400ms;
+  --dur-slower:  600ms;
+
+  /* ── ANIMATION EASINGS ────────────────────────────────── */
+  --ease-out:    cubic-bezier(.22,.68,0,1.2);
+  --ease-in:     cubic-bezier(.4,0,1,1);
+  --ease-inout:  cubic-bezier(.4,0,.2,1);
+  --ease-spring: cubic-bezier(.34,1.56,.64,1);
+
+  /* ── SAFE AREA ────────────────────────────────────────── */
+  --sai-t: env(safe-area-inset-top, 0px);
+  --sai-b: env(safe-area-inset-bottom, 0px);
+
+  /* ── LEGACY BRIDGE (compatibilidad con app.js existente) ─
+     No eliminar hasta migrar todas las referencias en app.js */
+  --bg0: var(--surface-page);
+  --bg1: var(--surface-card);
+  --bg2: var(--surface-elevated);
+  --bg3: var(--surface-modal);
+  --bord: var(--border-medium);
+  --bord-soft: var(--border-light);
+  --text: var(--text-primary);
+  --sub:  var(--text-secondary);
+  --dim:  var(--text-tertiary);
+  --red-hi: #ff3a2d;
+  --red-glow: rgba(225,6,0,.18);
+  --mono: var(--font-mono);
+  --disp: var(--font-display);
+  --radius: var(--radius-lg);
+}
